@@ -31,7 +31,7 @@ class ObjectDetectorEnsemble:
 
 
     
-            
+    
 
     def predict(self, img_folder, gt_folder):
         # Load the image paths in the folder
@@ -57,8 +57,12 @@ class ObjectDetectorEnsemble:
                 labels_mod = (raw_preds[:, 5])
             if modelv == "yolov8":
                 print("v8")
+
+            for bbox, score, label, img in zip(boxes_mod, scores_mod, labels_mod, img_paths):
+                annotator = Annotator()
             
-            plot_one_box(bbox, img, label=class_label, score=score)
+            
+            
 
         
         all_model_preds = 0
