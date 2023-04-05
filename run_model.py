@@ -7,6 +7,10 @@ import subprocess
 from ultralytics import YOLO
 import yolov5
 
+from yolov5.utils.metrics import ConfusionMatrix
+from yolov5.utils.torch_utils import select_device
+from yolov5.utils.plots import Annotator
+
 
 
 class ObjectDetectorEnsemble:
@@ -44,15 +48,17 @@ class ObjectDetectorEnsemble:
             # Add the model predictions to the list
             model_preds.append(raw_preds)
             print(raw_preds)
-
+            boxes_mod = []
+            scores_mod = []
+            labels_mod = []
             if modelv == "yolov5":
-                boxes.append(raw_preds[:, :4]) # x1, y1, x2, y2
-                scores.append(raw_preds[:, 4])
-                labels_list.append(raw_preds[:, 5])
+                boxes_mod = (raw_preds[:, :4]) # x1, y1, x2, y2
+                scores_mod = (raw_preds[:, 4])
+                labels_mod = (raw_preds[:, 5])
             if modelv == "yolov8":
                 print("v8")
             
-
+            plot_one_box(bbox, img, label=class_label, score=score)
 
         
         all_model_preds = 0
@@ -81,6 +87,25 @@ class ObjectDetectorEnsemble:
             subprocess.run(['python', 'program.py'])
         return np.column_stack((boxes, scores, labels))
             
+    def calculate_metrics(pred_path, gt_path, conf=0.3, iou= 0.8, device=select_device(), classes=["D00", "D10", "D20", "D40"]):
+        # Create a ConfusionMatrix object for each class
+        confusion_matrices = [ConfusionMatrix(nc=1) for _ in range(len(classes))]
+
+        # Load the predictions and ground truth annotations
+        preds = np.loadtxt(pred_path, delimiter=",")
+        gts = np.loadtxt(gt_path, delimiter=",")
+
+        # Process the batch separately for each class
+        for i, class_name in enumerate(classes):
+            class_preds = preds[preds[:, 5] == i]  # select the predictions for this class
+            class_gts = gts[gts[:, 4] == i]  # select the ground truth annotations for this class
+            confusion_matrices[i].process_batch(class_preds, class_gts, conf_thres=conf, iou_thres=iou, device=device)
+
+        # Calculate precision, recall, and mAP separately for each class
+        for i, class_name in enumerate(classes):
+            class_precision, class_recall = confusion_matrices[i].precision_recall()
+            class_mAP = confusion_matrices[i].average_precision()
+            print(f"{class_name}: precision={class_precision:.4f}, recall={class_recall:.4f}, mAP={class_mAP:.4f}")
 
             
 
