@@ -57,22 +57,10 @@ class ObjectDetectorEnsemble:
                 YOLO(weights)
                 self.models.append((weights, "yolov8"))
 
-
-    
-    
-
-    def predict(self, img_folder, gt_folder=None):
-        # Load the image paths in the folder
-        img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
-        #gt_paths = [os.path.join(gt_folder, f) for f in os.listdir(gt_folder) if f.endswith('.txt') or f.endswith('.xml')]
-
-        #list of lists where each list contains all predictions for each model
-        model_preds = []
-        boxes_list, scores_list, labels_list, img_shapes_list= [], [], [], []
-        for img in img_paths:
-            img_shapes_list.append(cv2.imread(img).shape[:2])
-        
-        print(img_shapes_list)
+    #Runs m models defined in self.models
+    #Returns bboxes, scores, labels
+    def run_models(self, img_paths):
+        boxes_list, scores_list, labels_list = [], [], []
         for (model, modelv), model_name in zip(self.models, self.model_names):
             # Make a prediction with the current model
             raw_preds = []
@@ -96,7 +84,6 @@ class ObjectDetectorEnsemble:
             
             if modelv == "yolov5":
                 for i in range(0, len(raw_preds)):
-                    #print(pred)
                     boxes_mod.append(raw_preds.pred[i][:, :4].cpu().numpy()) # x1, y1, x2, y2
                     scores_mod.append(raw_preds.pred[i][:, 4].cpu().numpy())
                     labels_mod.append(raw_preds.pred[i][:, 5].cpu().numpy())
@@ -106,14 +93,29 @@ class ObjectDetectorEnsemble:
                     boxes_mod.append(result[:, :4].cpu().numpy()) # x1, y1, x2, y2
                     scores_mod.append(result[:, 4].cpu().numpy())
                     labels_mod.append(result[:, 5].cpu().numpy())
-                print("v8")
 
-            #print(boxes_mod)
-            
             boxes_list.append(boxes_mod)
             scores_list.append(scores_mod)
             labels_list.append(labels_mod)
+        return boxes_list, scores_list, labels_list
+
+    
+    #runs predictions on all images in img_folder using self.ensemble to decide which method
+    def predict(self, img_folder, gt_folder=None):
+
+        # Load the image paths in the folder
+        img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
+        #gt_paths = [os.path.join(gt_folder, f) for f in os.listdir(gt_folder) if f.endswith('.txt') or f.endswith('.xml')]
+
+        boxes_list, scores_list, labels_list = self.run_models(img_paths=img_paths)
+        img_shapes_list= []
+        for img in img_paths:
+            img_shapes_list.append(cv2.imread(img).shape[:2])
         
+        self.run_ensemble(img_shapes_list, boxes_list, scores_list, labels_list)
+        
+    #Runs runs the result of each img on in ensemble
+    def run_ensemble(self, img_shapes_list, boxes_list, scores_list, labels_list):
         j = 0
         #for each first img predictions from each model, should iterate once for each i images.
         for model_predictions_boxes, model_predictions_scores, model_predictions_labels in zip(zip(*boxes_list), zip(*scores_list), zip(*labels_list)):
@@ -137,6 +139,7 @@ class ObjectDetectorEnsemble:
 
             j+=1
         self.pick_ensemble(bboxes, scores, labels)
+
             
             
     def pick_ensemble(self, bboxes, scores, labels):
