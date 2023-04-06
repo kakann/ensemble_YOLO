@@ -11,28 +11,6 @@ from yolov5.utils.metrics import ConfusionMatrix
 from yolov5.utils.torch_utils import select_device
 from yolov5.utils.plots import Annotator
 
-class Prediction:
-    def __init__(self, img, bbox, score, label ):
-        self.img=img
-        self.bbox=bbox
-        self.score = score
-        self.label = label
-
-class ImageObject:
-    def __init__(self, imgpath, imgsz) -> None:
-        pass
-
-class Model:
-    def __init__(self, model_name, modelv) -> None:
-        self.model_name=model_name
-        self.modelv=modelv
-
-class ModelResult:
-    def __init__(self, predList, model) -> None:
-        pass
-        
-        
-
 
 class ObjectDetectorEnsemble:
     def __init__(self, models, ensemble_method='mean', conf=0.4, iou=0.9, tta=True):
