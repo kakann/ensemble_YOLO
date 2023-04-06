@@ -1,3 +1,5 @@
 obbstacking
-yolov8_640.pt
+yolov8x_640.pt
 yolov5x6_1280.pt
+test_out/*
+ensemble

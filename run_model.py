@@ -14,56 +14,107 @@ from yolov5.utils.plots import Annotator
 
 
 class ObjectDetectorEnsemble:
-    def __init__(self, models, ensemble_method='mean', conf=0.3, iou=0.9, tta=True):
-        #self.models = models
+    def __init__(self, models, ensemble_method='mean', conf=0.4, iou=0.9, tta=True):
+        self.models = []
         self.ensemble_method = ensemble_method
         self.conf = conf
         self.iou = iou
         self.tta = tta
+        self.model_names = []
         for model in models:
             self.model_names.append(model.split(".")[0])
+            #print(model)
         
+        print(self.model_names)
         for weights in models:
-            try:
-                self.models.append(yolov5.load(weights), "yolov5")
+            try: 
+               yolov5.load(weights)
+               self.models.append((weights, "yolov5"))
+               print("v5")
             except:
-                self.models.append(YOLO(weights), "yolov8")
+                print("v8")
+                YOLO(weights)
+                self.models.append((weights, "yolov8"))
 
 
     
     
 
-    def predict(self, img_folder, gt_folder):
+    def predict(self, img_folder, gt_folder=None):
         # Load the image paths in the folder
         img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
-        gt_paths = [os.path.join(gt_folder, f) for f in os.listdir(gt_folder) if f.endswith('.txt') or f.endswith('.xml')]
+        #gt_paths = [os.path.join(gt_folder, f) for f in os.listdir(gt_folder) if f.endswith('.txt') or f.endswith('.xml')]
 
         #list of lists where each list contains all predictions for each model
         model_preds = []
         boxes_list, scores_list, labels_list = [], [], []
-        for model, modelv in self.models:
+        for (model, modelv), model_name in zip(self.models, self.model_names):
             # Make a prediction with the current model
-            raw_preds = model(img_paths, augment=self.tta, conf=self.conf, iou=self.iou )
-                
+            raw_preds = []
+
+            if modelv == "yolov8":
+                print(model)
+                mod = YOLO(model)
+                raw_preds = mod(img_paths, augment=self.tta, conf=self.conf, iou=self.iou)
+            else:
+                mod = yolov5.load(model)
+                mod.conf = self.conf
+                mod.iou = 0.6
+                mod.imgsz= 1280
+                raw_preds = mod(img_paths, augment=self.tta) # , conf=self.conf, iou=self.iou
+
+            
             # Add the model predictions to the list
-            model_preds.append(raw_preds)
-            print(raw_preds)
             boxes_mod = []
             scores_mod = []
             labels_mod = []
+            
             if modelv == "yolov5":
-                boxes_mod = (raw_preds[:, :4]) # x1, y1, x2, y2
-                scores_mod = (raw_preds[:, 4])
-                labels_mod = (raw_preds[:, 5])
+                for i in range(0, len(raw_preds)):
+                    #print(pred)
+                    boxes_mod.append(raw_preds.pred[i][:, :4].cpu().numpy()) # x1, y1, x2, y2
+                    scores_mod.append(raw_preds.pred[i][:, 4].cpu().numpy())
+                    labels_mod.append(raw_preds.pred[i][:, 5].cpu().numpy())
             if modelv == "yolov8":
+                for result in raw_preds:
+                    result = result.boxes.boxes
+                    boxes_mod.append(result[:, :4].cpu().numpy()) # x1, y1, x2, y2
+                    scores_mod.append(result[:, 4].cpu().numpy())
+                    labels_mod.append(result[:, 5].cpu().numpy())
                 print("v8")
 
-            for bbox, score, label, img in zip(boxes_mod, scores_mod, labels_mod, img_paths):
-                annotator = Annotator()
+            #print(boxes_mod)
             
-            
-            
+            boxes_list.append(boxes_mod)
+            scores_list.append(scores_list)
+            labels_list.append(labels_mod)
 
+            #print(boxes_mod)
+
+            import pathlib
+            pathlib.Path(f"test_out/{model_name}").mkdir(parents=True, exist_ok=True) 
+            #os.mkdir(f"test_out/{model_name}")
+            i =0
+            for img in img_paths:
+                img1 = cv2.imread(img)
+                if img1 is None:
+                    print(f"Failed to read image: {img}")
+                    continue
+                annotator = Annotator(img1)
+                for bbox, score, label in zip(boxes_mod[i], scores_mod[i], labels_mod[i]):
+                    #print(bbox)
+                    #print(f"current place {j}")
+                    annotator.box_label(box=bbox, label=f"{label} {score}", )
+                
+                cv2.imshow('image',img1)
+                cv2.waitKey(1000)
+                cv2.imwrite(f"test_out/{model_name}/{i}.jpg", img1)
+                i+=1
+
+            
+            
+            
+        
         
         all_model_preds = 0
         # Combine the model predictions using the ensemble method
@@ -73,7 +124,7 @@ class ObjectDetectorEnsemble:
             combined_preds = np.maximum.reduce(all_model_preds)
         elif self.ensemble_method == 'nms':
             boxes, scores, labels = nms(boxes_list, scores_list, labels_list, iou_thr=self.iou)
-            combined_preds = np.column_stack((boxes, scores, labels))
+            combined_preds = np.column_stack((boxes, scores.numpy(), labels.numpy()))
 
         elif self.ensemble_method == 'soft_nms':
             boxes, scores, labels = soft_nms(boxes_list, scores_list, labels_list, method=2, iou_thr=self.iou)
