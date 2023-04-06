@@ -13,13 +13,15 @@ from yolov5.utils.plots import Annotator
 
 
 class ObjectDetectorEnsemble:
-    def __init__(self, models, ensemble_method='mean', conf=0.4, iou=0.9, tta=True):
+    def __init__(self, models, confs, ious, ensemble_method='mean', conf=0.4, iou=0.9, tta=True):
         self.models = []
         self.ensemble_method = ensemble_method
         self.conf = conf
         self.iou = iou
         self.tta = tta
         self.model_names = []
+        self.confs = confs
+        self.ious = ious
         for model in models:
             self.model_names.append(model.split(".")[0])
             #print(model)
@@ -27,7 +29,7 @@ class ObjectDetectorEnsemble:
         print(self.model_names)
         for weights in models:
             try: 
-               yolov5.load(weights)
+               yolo = yolov5.load(weights)
                self.models.append((weights, "yolov5"))
                print("v5")
             except:
@@ -39,14 +41,14 @@ class ObjectDetectorEnsemble:
     #Returns bboxes, scores, labels
     def run_models(self, img_paths):
         boxes_list, scores_list, labels_list = [], [], []
-        for (model, modelv), model_name in zip(self.models, self.model_names):
+        for (model, modelv), model_name, conf, iou in zip(self.models, self.model_names, self.confs, self.ious):
             # Make a prediction with the current model
             raw_preds = []
 
             if modelv == "yolov8":
                 print(model)
                 mod = YOLO(model)
-                raw_preds = mod(img_paths, augment=self.tta, conf=self.conf, iou=0.999)
+                raw_preds = mod(img_paths, augment=self.tta, conf=self.conf, iou=iou)
             else:
                 mod = yolov5.load(model)
                 mod.conf = self.conf
