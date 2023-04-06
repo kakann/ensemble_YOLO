@@ -68,7 +68,7 @@ class ObjectDetectorEnsemble:
             if modelv == "yolov8":
                 print(model)
                 mod = YOLO(model)
-                raw_preds = mod(img_paths, augment=self.tta, conf=self.conf, iou=self.iou)
+                raw_preds = mod(img_paths, augment=self.tta, conf=self.conf, iou=0.999)
             else:
                 mod = yolov5.load(model)
                 mod.conf = self.conf
@@ -112,10 +112,10 @@ class ObjectDetectorEnsemble:
         for img in img_paths:
             img_shapes_list.append(cv2.imread(img).shape[:2])
         
-        self.run_ensemble(img_shapes_list, boxes_list, scores_list, labels_list)
+        self.run_ensemble(img_shapes_list, boxes_list, scores_list, labels_list, img_folder)
         
     #Runs runs the result of each img on in ensemble
-    def run_ensemble(self, img_shapes_list, boxes_list, scores_list, labels_list):
+    def run_ensemble(self, img_shapes_list, boxes_list, scores_list, labels_list, img_folder):
         j = 0
         result_bboxes, result_scores, result_labels = [], [],[]
         #for each first img predictions from each model, should iterate once for each i images.
@@ -139,18 +139,39 @@ class ObjectDetectorEnsemble:
 
             j+=1
             bboxes, scores, labels = self.pick_ensemble(bboxes, scores, labels)
+            
             result_bboxes.append(bboxes)
             result_labels.append(labels)
             result_scores.append(scores)
+        
+        result_bboxes = self.denormalize_bboxes_array(result_bboxes, img_shapes_list)
+        #print(result_bboxes[0])
+        img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
+        self.box_imgs(model_name="ensmble", bboxes=result_bboxes, labels=result_labels, scores=result_scores, output_folder="test_out", img_paths=img_paths)
         return result_bboxes, result_scores, result_scores
-            
+
+    def denormalize_bboxes_array(self, bboxes_array, img_shapes):
+        denormalized_bboxes_array = []
+        for bboxes, (original_height, original_width) in zip(bboxes_array, img_shapes):
+            denormalized_bboxes = []
+            for bbox in bboxes:
+                x1, y1, x2, y2 = bbox
+                x1 = x1 * original_width
+                y1 = y1 * original_height
+                x2 = x2 * original_width
+                y2 = y2 * original_height
+                denormalized_bbox = [x1, y1, x2, y2]
+                denormalized_bboxes.append(denormalized_bbox)
+            denormalized_bboxes_array.append(np.array(denormalized_bboxes))
+        return denormalized_bboxes_array        
+    
     #picks and runs ensemble on ONE img
     #should return the new bboxes, labels, and scores for that img TBC!!
     def pick_ensemble(self, bboxes, scores, labels):
         # Combine the model predictions using the ensemble method
 
         if self.ensemble_method == 'nms':
-            bboxes, scores, labels = nms(bboxes, scores, labels, iou_thr=self.iou)
+            bboxes, scores, labels = nms(bboxes, scores, labels, iou_thr=0.6)
             combined_preds = np.column_stack((bboxes, scores, labels))
 
         elif self.ensemble_method == 'soft_nms':
@@ -171,24 +192,24 @@ class ObjectDetectorEnsemble:
         
 
     #quickfixed, worked before but might need to take input format into close concideration
-    def box_imgs(model_name, bboxes, scores, labels, output_folder, img_paths):
+    def box_imgs(self, model_name, bboxes, scores, labels, output_folder, img_paths):
         import pathlib
         pathlib.Path(f"{output_folder}/{model_name}").mkdir(parents=True, exist_ok=True) 
         #os.mkdir(f"test_out/{model_name}")
         i =0
-        for img in img_paths:
+        for img, bboxes_img, scores_img, labels_img in zip(img_paths, bboxes, scores, labels):
             img1 = cv2.imread(img)
             if img1 is None:
                 print(f"Failed to read image: {img}")
                 continue
             annotator = Annotator(img1)
-            for bbox, score, label in zip(bboxes, scores, labels):
-                #print(bbox)
-                #print(f"current place {j}")
+            for bbox, score, label in zip(bboxes_img, scores_img, labels_img):# borde baseras på i vilket det inte göra tam
+
+                
                 annotator.box_label(box=bbox, label=f"{label} {score}", )
             
             cv2.imshow('image',img1)
-            cv2.waitKey(1000)
+            cv2.waitKey(3000)
             cv2.imwrite(f"{output_folder}/{model_name}/{i}.jpg", img1)
             i+=1     
 
