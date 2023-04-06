@@ -41,18 +41,18 @@ class ObjectDetectorEnsemble:
     #Returns bboxes, scores, labels
     def run_models(self, img_paths):
         boxes_list, scores_list, labels_list = [], [], []
-        for (model, modelv), model_name, conf, iou in zip(self.models, self.model_names, self.confs, self.ious):
+        for (model, modelv), model_name, confmod, ioumod in zip(self.models, self.model_names, self.confs, self.ious):
             # Make a prediction with the current model
             raw_preds = []
 
             if modelv == "yolov8":
                 print(model)
                 mod = YOLO(model)
-                raw_preds = mod(img_paths, augment=self.tta, conf=self.conf, iou=iou)
+                raw_preds = mod(img_paths, augment=self.tta, conf=confmod, iou=ioumod)
             else:
                 mod = yolov5.load(model)
-                mod.conf = self.conf
-                mod.iou = 0.6
+                mod.conf = confmod
+                mod.iou = ioumod
                 #mod.imgsz= 1280
                 raw_preds = mod(img_paths, augment=self.tta) # , conf=self.conf, iou=self.iou
 
@@ -154,7 +154,7 @@ class ObjectDetectorEnsemble:
             bboxes, scores, labels = nms(bboxes, scores, labels, iou_thr=0.6)
             combined_preds = np.column_stack((bboxes, scores, labels))
 
-        elif self.ensemble_method == 'soft_nms':
+        elif self.ensemble_method == 'soft-nms':
             bboxes, scores, labels = soft_nms(bboxes, scores, labels, method=2, iou_thr=self.iou)
             combined_preds = np.column_stack((bboxes, scores, labels))
         elif self.ensemble_method == 'nmw':
