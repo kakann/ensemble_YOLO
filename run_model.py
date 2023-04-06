@@ -117,14 +117,14 @@ class ObjectDetectorEnsemble:
     #Runs runs the result of each img on in ensemble
     def run_ensemble(self, img_shapes_list, boxes_list, scores_list, labels_list):
         j = 0
+        result_bboxes, result_scores, result_labels = [], [],[]
         #for each first img predictions from each model, should iterate once for each i images.
         for model_predictions_boxes, model_predictions_scores, model_predictions_labels in zip(zip(*boxes_list), zip(*scores_list), zip(*labels_list)):
             print(f"Doing {self.ensemble_method} on image {j}")
             bboxes= []
             scores= []
             labels=[]
-
-
+            #should iterate once for each model
             for i in range(len(model_predictions_boxes)):
                 width = img_shapes_list[j][1]
                 height = img_shapes_list[j][0]
@@ -138,32 +138,36 @@ class ObjectDetectorEnsemble:
                 labels += [model_predictions_labels[i].tolist()]
 
             j+=1
-        self.pick_ensemble(bboxes, scores, labels)
-
+            bboxes, scores, labels = self.pick_ensemble(bboxes, scores, labels)
+            result_bboxes.append(bboxes)
+            result_labels.append(labels)
+            result_scores.append(scores)
+        return result_bboxes, result_scores, result_scores
             
-            
+    #picks and runs ensemble on ONE img
+    #should return the new bboxes, labels, and scores for that img TBC!!
     def pick_ensemble(self, bboxes, scores, labels):
         # Combine the model predictions using the ensemble method
 
         if self.ensemble_method == 'nms':
-            boxes, scores, labels = nms(bboxes, scores, labels, iou_thr=self.iou)
-            combined_preds = np.column_stack((boxes, scores, labels))
+            bboxes, scores, labels = nms(bboxes, scores, labels, iou_thr=self.iou)
+            combined_preds = np.column_stack((bboxes, scores, labels))
 
         elif self.ensemble_method == 'soft_nms':
-            boxes, scores, labels = soft_nms(bboxes, scores, labels, method=2, iou_thr=self.iou)
-            combined_preds = np.column_stack((boxes, scores, labels))
+            bboxes, scores, labels = soft_nms(bboxes, scores, labels, method=2, iou_thr=self.iou)
+            combined_preds = np.column_stack((bboxes, scores, labels))
         elif self.ensemble_method == 'nmw':
 
-            boxes, scores, labels = non_maximum_weighted(bboxes, scores, labels, iou_thr=self.iou)
-            combined_preds = np.column_stack((boxes, scores, labels))
+            bboxes, scores, labels = non_maximum_weighted(bboxes, scores, labels, iou_thr=self.iou)
+            combined_preds = np.column_stack((bboxes, scores, labels))
         elif self.ensemble_method == 'wbf':
 
-            boxes, scores, labels = weighted_boxes_fusion(bboxes, scores, labels, iou_thr=self.iou)
-            combined_preds = np.column_stack((boxes, scores, labels))
+            bboxes, scores, labels = weighted_boxes_fusion(bboxes, scores, labels, iou_thr=self.iou)
+            combined_preds = np.column_stack((bboxes, scores, labels))
         elif self.ensemble_method == "OBB":
             #bboxes, scores, labels = [], [], []
             subprocess.run(['python', 'program.py'])
-        return np.column_stack((boxes, scores, labels))
+        return bboxes, scores, labels
         
 
     #quickfixed, worked before but might need to take input format into close concideration
