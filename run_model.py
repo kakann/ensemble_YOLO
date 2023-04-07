@@ -145,6 +145,7 @@ class ObjectDetectorEnsemble:
         for img in img_paths:
             img_shapes_list.append(cv2.imread(img).shape[:2])
         
+        #TODO Iterate each ensemble with iou =[0.5, 0.55. 0.6, ... 0.95] so that map50-90 can be calculated
         #Iterates over the list of ensembles
         ensembles = self.ensemble_methods
         for ensemble in ensembles:
@@ -327,7 +328,8 @@ class ObjectDetectorEnsemble:
 
 
 
-
+    #TODO, in order to produce F!/conf recall/conf graphs and more, need to check the precision/recall in all while removing predictions
+    #with conf < [0.01, 0.02, ... 0.1]
     def calculate_metrics(self, ground_truth_boxes, ground_truth_labels, predicted_boxes, predicted_scores, predicted_labels, iou_threshold=0.5):
         # Flatten the ground truth and prediction lists
         all_gt_boxes = np.concatenate(ground_truth_boxes)

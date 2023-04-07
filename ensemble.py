@@ -9,10 +9,13 @@ def main():
     ensemble= ObjectDetectorEnsemble(models= [ "yolov8x_640.pt", "yolov5x6_1280.pt"], confs=[0.3, 0.4], ious=[0.7, 0.7], ensemble_methods=["wbf", "nms"], iou=0.4) # 
 
     ensemble.predict("test_input")
+    #Maybe add f1/conf plot and similar plots options. Could be rough, but might be worth it=?
+    ensemble.compare_models()
 
     
 
 main()
+
 
 yolov8_conf_range= [0.1, 0,2, 0,3, 0.4, 0.5]
 yolov8_iou_range = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.999]
