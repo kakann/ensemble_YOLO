@@ -11,17 +11,36 @@ from yolov5.utils.metrics import ConfusionMatrix
 from yolov5.utils.torch_utils import select_device
 from yolov5.utils.plots import Annotator
 
+class Ensemble:
+    def __init__(self, ensemblem_name, predictions) -> None:
+        self.ensemblem_name = ensemblem_name
+        self.predictions = predictions
+
+class Model:
+    def __init__(self, name, results=None) -> None:
+        self.name = name
+        self.results= results
+        
+
+class EnsembleResults:
+    def __init__(self, models, ensembles) -> None:
+        self.models = models
+        self.ensembles = ensembles
+        
 
 class ObjectDetectorEnsemble:
-    def __init__(self, models, confs, ious, ensemble_method='mean', conf=0.4, iou=0.9, tta=True):
+    def __init__(self, models, confs, ious, ensemble_methods=["nms"], conf=0.4, iou=0.9, tta=True):
         self.models = []
-        self.ensemble_method = ensemble_method
+        self.model_predictions = []
+        self.ensemble_methods = ensemble_methods
+        self.ensemble_results = []
         self.conf = conf
         self.iou = iou
         self.tta = tta
         self.model_names = []
         self.confs = confs
         self.ious = ious
+        self.gts = []
         for model in models:
             self.model_names.append(model.split(".")[0])
             #print(model)
@@ -77,22 +96,60 @@ class ObjectDetectorEnsemble:
             boxes_list.append(boxes_mod)
             scores_list.append(scores_mod)
             labels_list.append(labels_mod)
+            self.model_predictions.append((boxes_mod, scores_mod, labels_mod))
         return boxes_list, scores_list, labels_list
 
     
     #runs predictions on all images in img_folder using self.ensemble to decide which method
-    def predict(self, img_folder, gt_folder=None):
-
+    def predict(self, img_folder=None, gt_folder=None, predict_folders= []):
+        if img_folder is None and predict_folders is None:
+            assert("No predictions to work with!")
+            
         # Load the image paths in the folder
-        img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
-        #gt_paths = [os.path.join(gt_folder, f) for f in os.listdir(gt_folder) if f.endswith('.txt') or f.endswith('.xml')]
+        boxes_list, scores_list, labels_list = [], [], []
+        gts = []
+        #Run all input models on the input data if there are not predict folders as input.
+        if img_folder is not None:
+            img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
+            if len(predict_folders) == 0:
+                boxes_list, scores_list, labels_list = self.run_models(img_paths=img_paths)
+        
+        #if there are predict folders and if they are equal in ammount to the amount of models, read predictions from input files instead 
+        # of doing predictions on the images.
+        if len(predict_folders) != 0:
+            if len(predict_folders) != len(self.models):
+                assert(f"the amount of models needs to be equal to the amount of predict folders: predfolder = {len(predict_folders)} != models {len(self.models)}")
+            for folder in predict_folders:
+                pred_paths = [os.path.join(folder, f) for f in os.listdir(folder) if f.endswith('.txt') or f.endswith('.xml')]
+                boxesp, scoresp, labelsp = [], [], []
+                for file in pred_paths:
+                    boxes, scores, labels = self.read_yolo_file(file)
+                    boxesp.append(boxes)
+                    scoresp.append(scores)
+                    labelsp.append(labels)
+                self.model_predictions.append((boxesp, scoresp, labelsp))
 
-        boxes_list, scores_list, labels_list = self.run_models(img_paths=img_paths)
+        #if there are groundtruths attatched, read them. They will be used for producing statistics later.
+        if gt_folder is not None:
+            gt_paths = [os.path.join(gt_folder, f) for f in os.listdir(gt_folder) if f.endswith('.txt') or f.endswith('.xml')]
+            for file in gt_paths:
+                gts.append(self.read_yolo_file(file))
+            self.gts =gts
+                    
+
+        #Calculate all img shapes(width, height)
         img_shapes_list= []
         for img in img_paths:
             img_shapes_list.append(cv2.imread(img).shape[:2])
         
-        self.run_ensemble(img_shapes_list, boxes_list, scores_list, labels_list, img_folder)
+        #Iterates over the list of ensembles
+        ensembles = self.ensemble_methods
+        for ensemble in ensembles:
+            self.ensemble_methods = ensemble
+            eboxes, escores, elabels = self.run_ensemble(img_shapes_list, boxes_list, scores_list, labels_list, img_folder)
+            ensembleResult = Ensemble(ensemble, (eboxes, escores, elabels))
+            self.ensemble_results.append(ensembleResult)
+        self.ensemble_methods =ensembles
         
     #Runs runs the result of each img on in ensemble
     def run_ensemble(self, img_shapes_list, boxes_list, scores_list, labels_list, img_folder):
@@ -100,7 +157,7 @@ class ObjectDetectorEnsemble:
         result_bboxes, result_scores, result_labels = [], [],[]
         #for each first img predictions from each model, should iterate once for each i images.
         for model_predictions_boxes, model_predictions_scores, model_predictions_labels in zip(zip(*boxes_list), zip(*scores_list), zip(*labels_list)):
-            print(f"Doing {self.ensemble_method} on image {j}")
+            print(f"Doing {self.ensemble_methods} on image {j}")
             bboxes= []
             scores= []
             labels=[]
@@ -120,12 +177,13 @@ class ObjectDetectorEnsemble:
             j+=1
             bboxes, scores, labels = self.pick_ensemble(bboxes, scores, labels)
             
+            
             result_bboxes.append(bboxes)
             result_labels.append(labels)
             result_scores.append(scores)
         
         result_bboxes = self.denormalize_bboxes_array(result_bboxes, img_shapes_list)
-        #print(result_bboxes[0])
+        
         img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
         self.box_imgs(model_name="ensmble", bboxes=result_bboxes, labels=result_labels, scores=result_scores, output_folder="test_out", img_paths=img_paths)
         return result_bboxes, result_scores, result_scores
@@ -150,28 +208,27 @@ class ObjectDetectorEnsemble:
     def pick_ensemble(self, bboxes, scores, labels):
         # Combine the model predictions using the ensemble method
 
-        if self.ensemble_method == 'nms':
+        if self.ensemble_methods == 'nms':
             bboxes, scores, labels = nms(bboxes, scores, labels, iou_thr=0.6)
             combined_preds = np.column_stack((bboxes, scores, labels))
 
-        elif self.ensemble_method == 'soft-nms':
+        elif self.ensemble_methods == 'soft-nms':
             bboxes, scores, labels = soft_nms(bboxes, scores, labels, method=2, iou_thr=self.iou)
             combined_preds = np.column_stack((bboxes, scores, labels))
-        elif self.ensemble_method == 'nmw':
+        elif self.ensemble_methods == 'nmw':
 
             bboxes, scores, labels = non_maximum_weighted(bboxes, scores, labels, iou_thr=self.iou)
             combined_preds = np.column_stack((bboxes, scores, labels))
-        elif self.ensemble_method == 'wbf':
+        elif self.ensemble_methods == 'wbf':
 
             bboxes, scores, labels = weighted_boxes_fusion(bboxes, scores, labels, iou_thr=self.iou)
             combined_preds = np.column_stack((bboxes, scores, labels))
-        elif self.ensemble_method == "OBB":
+        elif self.ensemble_methods == "OBB": #DOES NOT WORK ATM, NEEDS FIX
             #bboxes, scores, labels = [], [], []
             subprocess.run(['python', 'program.py'])
         return bboxes, scores, labels
         
 
-    #quickfixed, worked before but might need to take input format into close concideration
     def box_imgs(self, model_name, bboxes, scores, labels, output_folder, img_paths):
         import pathlib
         pathlib.Path(f"{output_folder}/{model_name}").mkdir(parents=True, exist_ok=True) 
@@ -215,6 +272,25 @@ class ObjectDetectorEnsemble:
             print(f"{class_name}: precision={class_precision:.4f}, recall={class_recall:.4f}, mAP={class_mAP:.4f}")
 
             
+    def read_yolo_file(self, annotation_file):
+        boxes, scores, labels = [], [], []
+        
+        with open(annotation_file, 'r') as file:
+            for line in file.readlines():
+                data = line.strip().split(' ')
+                label, x_center, y_center, width, height, score = int(data[0]), float(data[1]), float(data[2]), float(data[3]), float(data[4]), float(data[5])
+                
+                # Convert x_center, y_center, width, height to xmin, ymin, xmax, ymax
+                xmin = x_center - width / 2
+                ymin = y_center - height / 2
+                xmax = x_center + width / 2
+                ymax = y_center + height / 2
+                
+                boxes.append([xmin, ymin, xmax, ymax])
+                scores.append(score)
+                labels.append(label)
+        
+        return boxes, scores, labels
 
 
     def convert_files(folder_path, format):
