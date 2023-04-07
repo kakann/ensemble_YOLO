@@ -3,4 +3,4 @@ ensemble-boxes
 ultralytics
 opencv-python==4.7.0.72
 numpy
-sklearn
+scikit-learn==1.2.2

@@ -136,7 +136,7 @@ class ObjectDetectorEnsemble:
         if gt_folder is not None:
             gt_paths = [os.path.join(gt_folder, f) for f in os.listdir(gt_folder) if f.endswith('.txt') or f.endswith('.xml')]
             for file in gt_paths:
-                gts.append(self.read_yolo_file(file))
+                gts.append(self.read_yolo_groundtruth_file(file))
             self.gts =gts
                     
 
@@ -252,11 +252,30 @@ class ObjectDetectorEnsemble:
             cv2.waitKey(3000)
             cv2.imwrite(f"{output_folder}/{model_name}/{i}.jpg", img1)
             i+=1     
-            
-    def read_yolo_file(self, annotation_file):
+
+    def read_yolo_groundtruth_file(self, groundtruth_file):
+        boxes, labels = [], []
+
+        with open(groundtruth_file, 'r') as file:
+            for line in file.readlines():
+                data = line.strip().split(' ')
+                label, x_center, y_center, width, height = int(data[0]), float(data[1]), float(data[2]), float(data[3]), float(data[4])
+
+                # Convert x_center, y_center, width, height to xmin, ymin, xmax, ymax
+                xmin = x_center - width / 2
+                ymin = y_center - height / 2
+                xmax = x_center + width / 2
+                ymax = y_center + height / 2
+
+                boxes.append([xmin, ymin, xmax, ymax])
+                labels.append(label)
+                
+        return boxes, labels
+
+    def read_yolo_file(self, prediction_file):
         boxes, scores, labels = [], [], []
         
-        with open(annotation_file, 'r') as file:
+        with open(prediction_file, 'r') as file:
             for line in file.readlines():
                 data = line.strip().split(' ')
                 label, x_center, y_center, width, height, score = int(data[0]), float(data[1]), float(data[2]), float(data[3]), float(data[4]), float(data[5])
@@ -330,11 +349,12 @@ class ObjectDetectorEnsemble:
 
     
 
-    def compare_models(self, model_data, iou_threshold=0.5):
+    def compare_models(self, iou_threshold=0.5):
         plt.figure(figsize=(10, 7))
 
-        for model_name, data in model_data.items():
-            ground_truth_boxes, ground_truth_labels, predicted_boxes, predicted_scores, predicted_labels = data
+        ground_truth_boxes, ground_truth_labels = self.gts
+        for model_name, data in zip(self.model_names + self.ensemble_methods, self.model_predictions + self.ensemble_results):
+            predicted_boxes, predicted_scores, predicted_labels = data
             precisions, recalls, f1, precision, recall, pr_auc, average_precision = self.calculate_metrics(ground_truth_boxes, ground_truth_labels, predicted_boxes, predicted_scores, predicted_labels, iou_threshold)
 
             # Plot the precision-recall curve
