@@ -4,12 +4,15 @@ import numpy as np
 from ensemble_boxes import *
 import subprocess
 
+import matplotlib.pyplot as plt
 from ultralytics import YOLO
 import yolov5
 import time
 from yolov5.utils.metrics import ConfusionMatrix
 from yolov5.utils.torch_utils import select_device
 from yolov5.utils.plots import Annotator
+
+from sklearn.metrics import precision_recall_curve, average_precision_score, f1_score, precision_score, recall_score, auc
 
 class Ensemble:
     def __init__(self, ensemblem_name, predictions) -> None:
@@ -31,9 +34,9 @@ class EnsembleResults:
 class ObjectDetectorEnsemble:
     def __init__(self, models, confs, ious, ensemble_methods=["nms"], conf=0.4, iou=0.9, tta=True):
         self.models = []
-        self.model_predictions = []
+        self.model_predictions = [] # list of tuples. Each tuples is bboxes, scores, labels
         self.ensemble_methods = ensemble_methods
-        self.ensemble_results = []
+        self.ensemble_results = [] # list of tuples. Each tuples is bboxes, scores, labels
         self.conf = conf
         self.iou = iou
         self.tta = tta
@@ -103,8 +106,8 @@ class ObjectDetectorEnsemble:
     #runs predictions on all images in img_folder using self.ensemble to decide which method
     def predict(self, img_folder=None, gt_folder=None, predict_folders= []):
         if img_folder is None and predict_folders is None:
-            assert("No predictions to work with!")
-            
+            assert("No predictions to work with! Both img_folder and predict folders are empty!")
+
         # Load the image paths in the folder
         boxes_list, scores_list, labels_list = [], [], []
         gts = []
@@ -249,28 +252,6 @@ class ObjectDetectorEnsemble:
             cv2.waitKey(3000)
             cv2.imwrite(f"{output_folder}/{model_name}/{i}.jpg", img1)
             i+=1     
-
-
-    def calculate_metrics(pred_path, gt_path, conf=0.3, iou= 0.8, device=select_device(), classes=["D00", "D10", "D20", "D40"]):
-        # Create a ConfusionMatrix object for each class
-        confusion_matrices = [ConfusionMatrix(nc=1) for _ in range(len(classes))]
-
-        # Load the predictions and ground truth annotations
-        preds = np.loadtxt(pred_path, delimiter=",")
-        gts = np.loadtxt(gt_path, delimiter=",")
-
-        # Process the batch separately for each class
-        for i, class_name in enumerate(classes):
-            class_preds = preds[preds[:, 5] == i]  # select the predictions for this class
-            class_gts = gts[gts[:, 4] == i]  # select the ground truth annotations for this class
-            confusion_matrices[i].process_batch(class_preds, class_gts, conf_thres=conf, iou_thres=iou, device=device)
-
-        # Calculate precision, recall, and mAP separately for each class
-        for i, class_name in enumerate(classes):
-            class_precision, class_recall = confusion_matrices[i].precision_recall()
-            class_mAP = confusion_matrices[i].average_precision()
-            print(f"{class_name}: precision={class_precision:.4f}, recall={class_recall:.4f}, mAP={class_mAP:.4f}")
-
             
     def read_yolo_file(self, annotation_file):
         boxes, scores, labels = [], [], []
@@ -323,3 +304,45 @@ class ObjectDetectorEnsemble:
 
         #if format == "yolo":
         #    for xml in xml_file_paths:
+
+
+
+
+
+    def calculate_metrics(self, ground_truth_boxes, ground_truth_labels, predicted_boxes, predicted_scores, predicted_labels, iou_threshold=0.5):
+        # Flatten the ground truth and prediction lists
+        all_gt_boxes = np.concatenate(ground_truth_boxes)
+        all_gt_labels = np.concatenate(ground_truth_labels)
+        all_pred_boxes = np.concatenate(predicted_boxes)
+        all_pred_scores = np.concatenate(predicted_scores)
+        all_pred_labels = np.concatenate(predicted_labels)
+
+        # Calculate the metrics
+        precisions, recalls, _ = precision_recall_curve(all_gt_labels, all_pred_scores)
+        average_precision = average_precision_score(all_gt_labels, all_pred_scores)
+        f1 = f1_score(all_gt_labels, all_pred_labels)
+        precision = precision_score(all_gt_labels, all_pred_labels)
+        recall = recall_score(all_gt_labels, all_pred_labels)
+        pr_auc = auc(recalls, precisions)
+
+        return precisions, recalls, f1, precision, recall, pr_auc, average_precision
+
+
+    
+
+    def compare_models(self, model_data, iou_threshold=0.5):
+        plt.figure(figsize=(10, 7))
+
+        for model_name, data in model_data.items():
+            ground_truth_boxes, ground_truth_labels, predicted_boxes, predicted_scores, predicted_labels = data
+            precisions, recalls, f1, precision, recall, pr_auc, average_precision = self.calculate_metrics(ground_truth_boxes, ground_truth_labels, predicted_boxes, predicted_scores, predicted_labels, iou_threshold)
+
+            # Plot the precision-recall curve
+            plt.plot(recalls, precisions, label=f'{model_name} - AUC: {pr_auc:.2f} - AP: {average_precision:.2f}')
+
+        plt.xlabel('Recall')
+        plt.ylabel('Precision')
+        plt.title('Precision-Recall Curves')
+        plt.legend(loc='lower left')
+        plt.grid()
+        plt.show()
