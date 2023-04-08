@@ -92,7 +92,21 @@ class ObjectDetectorEnsemble:
             
             if modelv == "yolov5": #NEED TO CHECK FOR SAME ERROR AS YOLOV8 
                 for i in range(0, len(raw_preds)):
-                    boxes_mod.append(raw_preds.pred[i][:, :4].cpu().numpy()) # x1, y1, x2, y2
+                    #print(raw_preds.pred[i])
+                    #print(raw_preds.pred[i][:, :4].cpu().numpy())
+                    #print("asdsdasdaadsdda")
+                    height, width = cv2.imread(img_paths[i]).shape[:2]
+                    boxes = raw_preds.pred[i][:, :4].cpu().numpy()
+                    norm_boxes = []
+                    for box in boxes:
+                        x, y, w, h = box
+                        x/=width
+                        y/=height
+                        w/=width
+                        h/=height
+                        norm_boxes.append([x, y, w, h ])
+                    boxes_mod.append(norm_boxes) # x1, y1, x2, y2
+                    #print(norm_boxes)
                     scores_mod.append(raw_preds.pred[i][:, 4].cpu().numpy())
                     labels_mod.append(raw_preds.pred[i][:, 5].cpu().numpy())
             if modelv == "yolov8":
@@ -272,9 +286,6 @@ class ObjectDetectorEnsemble:
             annotator = Annotator(img1)
             for bbox, score, label in zip(bboxes_img, scores_img, labels_img):# borde baseras på i vilket det inte göra tam
 
-                #print(score)
-                #print(label)
-                #print(bbox)
                 annotator.box_label(box=bbox, label=f"{label} {score}", )
             
             cv2.imshow('image',img1)
@@ -359,7 +370,7 @@ class ObjectDetectorEnsemble:
         
         conf_thresholds =np.linspace(0, 1, 101)
         gt_boxes, gt_labels = self.gts
-        print(self.gts)
+        #print(self.gts)
         for model_name, data in zip(self.model_names, self.model_predictions): #+ ensembles)
             #print(self.model_predictions[0][2])
             pred_boxes, pred_scores, pred_labels = data
@@ -368,8 +379,8 @@ class ObjectDetectorEnsemble:
             pred_boxes = data[0]
             pred_scores = data[1]
             pred_labels = data[2]
-            print("OREDPSDASD")
-            print(pred_boxes)
+            #print("OREDPSDASD")
+            #print(pred_boxes)
             
             
 
@@ -395,7 +406,7 @@ class ObjectDetectorEnsemble:
         for i, img_path in enumerate(img_paths):
             image_id = i
             filename = img_path.split('/')[-1]
-            print(filename)
+            #print(filename)
             shape = cv2.imread(img_path).shape[:2]
             img_height, img_width = shape
 
@@ -411,6 +422,8 @@ class ObjectDetectorEnsemble:
             
             for j, box in enumerate(pred_boxes[i]):
                 coco_box = self.yolo_to_coco(box, img_height=img_height, img_width=img_width)
+                print("pred")
+                print(coco_box)
                 _, _, width, height = coco_box
                 coco_predictions.append({
                     'image_id': image_id,
@@ -426,14 +439,12 @@ class ObjectDetectorEnsemble:
                 #coco_box = self.convert_to_coco_format(coco_box)
                 x, y, width, height = self.yolo_to_coco(box, img_height=img_height, img_width=img_width)
                 
-                
-
                 area = width * height
                 
                 print("GT")
-                #print([x, y, width, height])
-                print(coco_box)
-                print(gt_labels[i][j])
+                print([x, y, width, height])
+                #print(x, y, width, height)
+                #print(gt_labels[i][j])
                 coco_ground_truth.append({
                     'id': gt_id,
                     'image_id': image_id,
@@ -443,6 +454,8 @@ class ObjectDetectorEnsemble:
                     'area': area
                 })
                 gt_id += 1
+            
+            
 
         categories = [
             {'id': 0, 'name': 'D00'},
@@ -458,11 +471,11 @@ class ObjectDetectorEnsemble:
         dt_coco = gt_coco.loadRes(coco_predictions)
 
 
-        print("Ground truth annotations:", len(gt_coco.dataset['annotations']))
-        print("Examples:", gt_coco.dataset['annotations'][:5])
+        #print("Ground truth annotations:", len(gt_coco.dataset['annotations']))
+        #print("Examples:", gt_coco.dataset['annotations'][:5])
 
-        print("Predictions:", len(dt_coco.dataset['annotations']))
-        print("Examples:", dt_coco.dataset['annotations'][:5])
+        #print("Predictions:", len(dt_coco.dataset['annotations']))
+        #print("Examples:", dt_coco.dataset['annotations'][:5])
         coco_eval = COCOeval(gt_coco, dt_coco, iouType='bbox')
 
         coco_eval.evaluate()
