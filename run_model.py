@@ -3,6 +3,10 @@ import cv2
 import numpy as np
 from ensemble_boxes import *
 import subprocess
+import copy
+
+from pycocotools.coco import COCO
+from pycocotools.cocoeval import COCOeval
 
 import matplotlib.pyplot as plt
 from ultralytics import YOLO
@@ -11,6 +15,7 @@ import time
 from yolov5.utils.metrics import ConfusionMatrix
 from yolov5.utils.torch_utils import select_device
 from yolov5.utils.plots import Annotator
+from sklearn.preprocessing import label_binarize
 
 from sklearn.metrics import precision_recall_curve, average_precision_score, f1_score, precision_score, recall_score, auc
 
@@ -32,11 +37,11 @@ class EnsembleResults:
         
 
 class ObjectDetectorEnsemble:
-    def __init__(self, models, confs, ious, ensemble_methods=["nms"], conf=0.4, iou=0.9, tta=True):
+    def __init__(self, models, confs, ious, ensemble_methods=["nms"], conf=0.4, iou=0.6, tta=True):
         self.models = []
         self.model_predictions = [] # list of tuples. Each tuples is bboxes, scores, labels
         self.ensemble_methods = ensemble_methods
-        self.ensemble_results = [] # list of tuples. Each tuples is bboxes, scores, labels
+        self.ensemble_results = [] # list of name, tuples. Each tuples is bboxes, scores, labels
         self.conf = conf
         self.iou = iou
         self.tta = tta
@@ -44,6 +49,7 @@ class ObjectDetectorEnsemble:
         self.confs = confs
         self.ious = ious
         self.gts = []
+        self.img_paths= []
         for model in models:
             self.model_names.append(model.split(".")[0])
             #print(model)
@@ -70,7 +76,7 @@ class ObjectDetectorEnsemble:
             if modelv == "yolov8":
                 print(model)
                 mod = YOLO(model)
-                raw_preds = mod(img_paths, augment=self.tta, conf=confmod, iou=ioumod)
+                raw_preds = mod(img_paths, augment=self.tta, imgsz=640, batch=1)
             else:
                 mod = yolov5.load(model)
                 mod.conf = confmod
@@ -84,38 +90,51 @@ class ObjectDetectorEnsemble:
             scores_mod = []
             labels_mod = []
             
-            if modelv == "yolov5":
+            if modelv == "yolov5": #NEED TO CHECK FOR SAME ERROR AS YOLOV8 
                 for i in range(0, len(raw_preds)):
                     boxes_mod.append(raw_preds.pred[i][:, :4].cpu().numpy()) # x1, y1, x2, y2
                     scores_mod.append(raw_preds.pred[i][:, 4].cpu().numpy())
                     labels_mod.append(raw_preds.pred[i][:, 5].cpu().numpy())
             if modelv == "yolov8":
                 for result in raw_preds:
-                    result = result.boxes.boxes
-                    boxes_mod.append(result[:, :4].cpu().numpy()) # x1, y1, x2, y2
-                    scores_mod.append(result[:, 4].cpu().numpy())
-                    labels_mod.append(result[:, 5].cpu().numpy())
+                    result = result.boxes
+                    
+                    boxes_mod.append(result.xywhn.cpu().numpy()) # x1, y1, x2, y2
+                    scores_mod.append(result.conf.cpu().numpy())
+                    labels_mod.append(result.cls.cpu().numpy())
 
             boxes_list.append(boxes_mod)
             scores_list.append(scores_mod)
             labels_list.append(labels_mod)
             self.model_predictions.append((boxes_mod, scores_mod, labels_mod))
-        return boxes_list, scores_list, labels_list
+            
 
     
     #runs predictions on all images in img_folder using self.ensemble to decide which method
     def predict(self, img_folder=None, gt_folder=None, predict_folders= []):
         if img_folder is None and predict_folders is None:
             assert("No predictions to work with! Both img_folder and predict folders are empty!")
+        img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
+        img_shapes_list= []
+        for img in img_paths:
+            img_shapes_list.append(cv2.imread(img).shape[:2])
 
         # Load the image paths in the folder
         boxes_list, scores_list, labels_list = [], [], []
-        gts = []
         #Run all input models on the input data if there are not predict folders as input.
         if img_folder is not None:
             img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
             if len(predict_folders) == 0:
-                boxes_list, scores_list, labels_list = self.run_models(img_paths=img_paths)
+                self.run_models(img_paths=img_paths)
+
+                #img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
+                #boxes_list, scores_list, labels_list  = self.model_predictions[0]
+                
+                #self.box_imgs(model_name="YOLOV8asdsdasda", bboxes=boxes_list, labels=labels_list, scores=scores_list, output_folder="test_out", img_paths=img_paths)
+
+            self.img_paths = img_paths
+        #Calculate all img shapes(width, height)
+        
         
         #if there are predict folders and if they are equal in ammount to the amount of models, read predictions from input files instead 
         # of doing predictions on the images.
@@ -135,15 +154,19 @@ class ObjectDetectorEnsemble:
         #if there are groundtruths attatched, read them. They will be used for producing statistics later.
         if gt_folder is not None:
             gt_paths = [os.path.join(gt_folder, f) for f in os.listdir(gt_folder) if f.endswith('.txt') or f.endswith('.xml')]
+            bbox_list, label_list = [], []
             for file in gt_paths:
-                gts.append(self.read_yolo_groundtruth_file(file))
-            self.gts =gts
+                #ALREADY IN COCO FORMAT HERE
+                bboxes, labels = self.read_yolo_groundtruth_file(file)
+                bbox_list.append(bboxes)
+                label_list.append(labels)
+
+            self.gts = [bbox_list, label_list]
+            
                     
 
-        #Calculate all img shapes(width, height)
-        img_shapes_list= []
-        for img in img_paths:
-            img_shapes_list.append(cv2.imread(img).shape[:2])
+        
+        
         
         #TODO Iterate each ensemble with iou =[0.5, 0.55. 0.6, ... 0.95] so that map50-90 can be calculated
         #Iterates over the list of ensembles
@@ -154,7 +177,9 @@ class ObjectDetectorEnsemble:
             ensembleResult = Ensemble(ensemble, (eboxes, escores, elabels))
             self.ensemble_results.append(ensembleResult)
         self.ensemble_methods =ensembles
-        
+
+
+
     #Runs runs the result of each img on in ensemble
     def run_ensemble(self, img_shapes_list, boxes_list, scores_list, labels_list, img_folder):
         j = 0
@@ -187,9 +212,10 @@ class ObjectDetectorEnsemble:
             result_scores.append(scores)
         
         result_bboxes = self.denormalize_bboxes_array(result_bboxes, img_shapes_list)
-        
-        img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
-        self.box_imgs(model_name="ensmble", bboxes=result_bboxes, labels=result_labels, scores=result_scores, output_folder="test_out", img_paths=img_paths)
+        #print(result_bboxes)
+        #UNCOMMENT TO SHOW IMGS
+        #img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
+        #self.box_imgs(model_name="YOLOV8", bboxes=result_bboxes, labels=result_labels, scores=result_scores, output_folder="test_out", img_paths=img_paths)
         return result_bboxes, result_scores, result_scores
 
     def denormalize_bboxes_array(self, bboxes_array, img_shapes):
@@ -246,12 +272,16 @@ class ObjectDetectorEnsemble:
             annotator = Annotator(img1)
             for bbox, score, label in zip(bboxes_img, scores_img, labels_img):# borde baseras på i vilket det inte göra tam
 
-                
+                #print(score)
+                #print(label)
+                #print(bbox)
                 annotator.box_label(box=bbox, label=f"{label} {score}", )
             
             cv2.imshow('image',img1)
             cv2.waitKey(3000)
-            cv2.imwrite(f"{output_folder}/{model_name}/{i}.jpg", img1)
+            #print(img)
+            
+            cv2.imwrite(f"{output_folder}/{model_name}/{img.split('/')[1]}", img1)
             i+=1     
 
     def read_yolo_groundtruth_file(self, groundtruth_file):
@@ -262,13 +292,7 @@ class ObjectDetectorEnsemble:
                 data = line.strip().split(' ')
                 label, x_center, y_center, width, height = int(data[0]), float(data[1]), float(data[2]), float(data[3]), float(data[4])
 
-                # Convert x_center, y_center, width, height to xmin, ymin, xmax, ymax
-                xmin = x_center - width / 2
-                ymin = y_center - height / 2
-                xmax = x_center + width / 2
-                ymax = y_center + height / 2
-
-                boxes.append([xmin, ymin, xmax, ymax])
+                boxes.append((x_center, y_center, width, height))
                 labels.append(label)
                 
         return boxes, labels
@@ -292,7 +316,6 @@ class ObjectDetectorEnsemble:
                 labels.append(label)
         
         return boxes, scores, labels
-
 
     def convert_files(folder_path, format):
     # Check if the format is valid
@@ -325,42 +348,34 @@ class ObjectDetectorEnsemble:
         #if format == "yolo":
         #    for xml in xml_file_paths:
 
-
-
-
-    #TODO, in order to produce F!/conf recall/conf graphs and more, need to check the precision/recall in all while removing predictions
-    #with conf < [0.01, 0.02, ... 0.1]
-    def calculate_metrics(self, ground_truth_boxes, ground_truth_labels, predicted_boxes, predicted_scores, predicted_labels, iou_threshold=0.5):
-        # Flatten the ground truth and prediction lists
-        all_gt_boxes = np.concatenate(ground_truth_boxes)
-        all_gt_labels = np.concatenate(ground_truth_labels)
-        all_pred_boxes = np.concatenate(predicted_boxes)
-        all_pred_scores = np.concatenate(predicted_scores)
-        all_pred_labels = np.concatenate(predicted_labels)
-
-        # Calculate the metrics
-        precisions, recalls, _ = precision_recall_curve(all_gt_labels, all_pred_scores)
-        average_precision = average_precision_score(all_gt_labels, all_pred_scores)
-        f1 = f1_score(all_gt_labels, all_pred_labels)
-        precision = precision_score(all_gt_labels, all_pred_labels)
-        recall = recall_score(all_gt_labels, all_pred_labels)
-        pr_auc = auc(recalls, precisions)
-
-        return precisions, recalls, f1, precision, recall, pr_auc, average_precision
-
-
-    
-
-    def compare_models(self, iou_threshold=0.5):
+    def compare_models(self):
         plt.figure(figsize=(10, 7))
+        ensembles = []
+        for ensemble in self.ensemble_results:
+            ensembles.append(ensemble.predictions)
+        
+        #print(len(self.model_predictions[0]))
+        #print(ensembles)
+        
+        conf_thresholds =np.linspace(0, 1, 101)
+        gt_boxes, gt_labels = self.gts
+        print(self.gts)
+        for model_name, data in zip(self.model_names, self.model_predictions): #+ ensembles)
+            #print(self.model_predictions[0][2])
+            pred_boxes, pred_scores, pred_labels = data
+            print(model_name)
+            #print(data[2])
+            pred_boxes = data[0]
+            pred_scores = data[1]
+            pred_labels = data[2]
+            print("OREDPSDASD")
+            print(pred_boxes)
+            
+            
 
-        ground_truth_boxes, ground_truth_labels = self.gts
-        for model_name, data in zip(self.model_names + self.ensemble_methods, self.model_predictions + self.ensemble_results):
-            predicted_boxes, predicted_scores, predicted_labels = data
-            precisions, recalls, f1, precision, recall, pr_auc, average_precision = self.calculate_metrics(ground_truth_boxes, ground_truth_labels, predicted_boxes, predicted_scores, predicted_labels, iou_threshold)
-
-            # Plot the precision-recall curve
-            plt.plot(recalls, precisions, label=f'{model_name} - AUC: {pr_auc:.2f} - AP: {average_precision:.2f}')
+            
+            self.eval_model(self.img_paths, pred_boxes, pred_labels, pred_scores, gt_boxes, gt_labels)
+            
 
         plt.xlabel('Recall')
         plt.ylabel('Precision')
@@ -368,3 +383,109 @@ class ObjectDetectorEnsemble:
         plt.legend(loc='lower left')
         plt.grid()
         plt.show()
+        plt.savefig('test.png')
+   
+    def eval_model(self, img_paths, pred_boxes, pred_labels, pred_scores, gt_boxes, gt_labels):
+        coco_predictions = []
+        coco_ground_truth = []
+        images = []
+
+        gt_id = 0
+
+        for i, img_path in enumerate(img_paths):
+            image_id = i
+            filename = img_path.split('/')[-1]
+            print(filename)
+            shape = cv2.imread(img_path).shape[:2]
+            img_height, img_width = shape
+
+            coco_image = {
+                'id': image_id,
+                'file_name': filename,
+                'width': img_width,
+                'height': img_height
+            }
+
+            images.append(coco_image)
+                
+            
+            for j, box in enumerate(pred_boxes[i]):
+                coco_box = self.yolo_to_coco(box, img_height=img_height, img_width=img_width)
+                _, _, width, height = coco_box
+                coco_predictions.append({
+                    'image_id': image_id,
+                    'category_id': int(pred_labels[i][j]),
+                    'bbox': coco_box,
+                    'score': pred_scores[i][j],
+                    'area' : width * height
+                })
+            
+            
+            for j, box in enumerate(gt_boxes[i]):
+                coco_box = box
+                #coco_box = self.convert_to_coco_format(coco_box)
+                x, y, width, height = self.yolo_to_coco(box, img_height=img_height, img_width=img_width)
+                
+                
+
+                area = width * height
+                
+                print("GT")
+                #print([x, y, width, height])
+                print(coco_box)
+                print(gt_labels[i][j])
+                coco_ground_truth.append({
+                    'id': gt_id,
+                    'image_id': image_id,
+                    'category_id': gt_labels[i][j],
+                    'bbox': [x, y, width, height],
+                    'iscrowd': 0,
+                    'area': area
+                })
+                gt_id += 1
+
+        categories = [
+            {'id': 0, 'name': 'D00'},
+            {'id': 1, 'name': 'D10'},
+            {'id': 2, 'name': 'D20'},
+            {'id': 3, 'name': 'D40'}
+        ]
+
+        gt_coco = COCO()
+        gt_coco.dataset = {'annotations': coco_ground_truth, 'images': images, 'categories': categories}
+        gt_coco.createIndex()
+
+        dt_coco = gt_coco.loadRes(coco_predictions)
+
+
+        print("Ground truth annotations:", len(gt_coco.dataset['annotations']))
+        print("Examples:", gt_coco.dataset['annotations'][:5])
+
+        print("Predictions:", len(dt_coco.dataset['annotations']))
+        print("Examples:", dt_coco.dataset['annotations'][:5])
+        coco_eval = COCOeval(gt_coco, dt_coco, iouType='bbox')
+
+        coco_eval.evaluate()
+        coco_eval.accumulate()
+        coco_eval.summarize()
+
+        precision = coco_eval.stats[0]
+        recall = coco_eval.stats[1]
+        f1_score = 2 * (precision * recall) / (precision + recall)
+    
+    def yolo_to_coco(self, yolo_bbox, img_width, img_height):
+        x_center, y_center, width, height = yolo_bbox
+
+        # Denormalize the coordinates and dimensions
+        x_center *= img_width
+        y_center *= img_height
+        width *= img_width
+        height *= img_height
+
+        # Calculate the top-left corner (x_min, y_min) of the bounding box
+        x_min = x_center - width / 2
+        y_min = y_center - height / 2
+
+        # Return the COCO format bounding box [x_min, y_min, width, height]
+        return [x_min, y_min, width, height]
+    

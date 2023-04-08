@@ -3,3 +3,6 @@ yolov8x_640.pt
 yolov5x6_1280.pt
 test_out/*
 ensemble
+test_input/*
+cocoapi
+test_gts
