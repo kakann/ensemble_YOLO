@@ -68,7 +68,6 @@ class ObjectDetectorEnsemble:
     #Runs m models defined in self.models
     #Returns bboxes, scores, labels
     def run_models(self, img_paths):
-        boxes_list, scores_list, labels_list = [], [], []
         for (model, modelv), model_name, confmod, ioumod in zip(self.models, self.model_names, self.confs, self.ious):
             # Make a prediction with the current model
             raw_preds = []
@@ -92,34 +91,22 @@ class ObjectDetectorEnsemble:
             
             if modelv == "yolov5": #NEED TO CHECK FOR SAME ERROR AS YOLOV8 
                 for i in range(0, len(raw_preds)):
-                    #print(raw_preds.pred[i])
-                    #print(raw_preds.pred[i][:, :4].cpu().numpy())
-                    #print("asdsdasdaadsdda")
-                    height, width = cv2.imread(img_paths[i]).shape[:2]
-                    boxes = raw_preds.pred[i][:, :4].cpu().numpy()
-                    norm_boxes = []
-                    for box in boxes:
-                        x, y, w, h = box
-                        x/=width
-                        y/=height
-                        w/=width
-                        h/=height
-                        norm_boxes.append([x, y, w, h ])
-                    boxes_mod.append(norm_boxes) # x1, y1, x2, y2
+                    print(raw_preds.xywhn[i][:, :4].cpu().numpy())
+                    
+                    
+                    boxes_mod.append(raw_preds.xywhn[i][:, :4].cpu().numpy())
+                    
+                    
                     #print(norm_boxes)
                     scores_mod.append(raw_preds.pred[i][:, 4].cpu().numpy())
                     labels_mod.append(raw_preds.pred[i][:, 5].cpu().numpy())
             if modelv == "yolov8":
                 for result in raw_preds:
                     result = result.boxes
-                    
                     boxes_mod.append(result.xywhn.cpu().numpy()) # x1, y1, x2, y2
                     scores_mod.append(result.conf.cpu().numpy())
                     labels_mod.append(result.cls.cpu().numpy())
 
-            boxes_list.append(boxes_mod)
-            scores_list.append(scores_mod)
-            labels_list.append(labels_mod)
             self.model_predictions.append((boxes_mod, scores_mod, labels_mod))
             
 
@@ -379,6 +366,7 @@ class ObjectDetectorEnsemble:
             pred_boxes = data[0]
             pred_scores = data[1]
             pred_labels = data[2]
+            #print(pred_boxes)
             #print("OREDPSDASD")
             #print(pred_boxes)
             
@@ -409,6 +397,8 @@ class ObjectDetectorEnsemble:
             #print(filename)
             shape = cv2.imread(img_path).shape[:2]
             img_height, img_width = shape
+            print("shape")
+            print(img_height, img_width)
 
             coco_image = {
                 'id': image_id,
@@ -421,6 +411,8 @@ class ObjectDetectorEnsemble:
                 
             
             for j, box in enumerate(pred_boxes[i]):
+                #print("prebox before conversion")
+                #print(box)
                 coco_box = self.yolo_to_coco(box, img_height=img_height, img_width=img_width)
                 print("pred")
                 print(coco_box)
@@ -488,7 +480,12 @@ class ObjectDetectorEnsemble:
     
     def yolo_to_coco(self, yolo_bbox, img_width, img_height):
         x_center, y_center, width, height = yolo_bbox
+        #print("inside coversion")
+        #print(yolo_bbox)
 
+        # Check if any of the input values are outside the expected range
+        if any(value < 0 or value > 1 for value in yolo_bbox):
+            print("Invalid YOLO bounding box:", yolo_bbox)
         # Denormalize the coordinates and dimensions
         x_center *= img_width
         y_center *= img_height
@@ -498,6 +495,9 @@ class ObjectDetectorEnsemble:
         # Calculate the top-left corner (x_min, y_min) of the bounding box
         x_min = x_center - width / 2
         y_min = y_center - height / 2
+
+        #print("y/xmin")
+        #print(x_min, y_min)
 
         # Return the COCO format bounding box [x_min, y_min, width, height]
         return [x_min, y_min, width, height]
