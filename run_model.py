@@ -68,6 +68,7 @@ class ObjectDetectorEnsemble:
     #Runs m models defined in self.models
     #Returns bboxes, scores, labels
     def run_models(self, img_paths):
+        boxes_list, scores_list, labels_list = [], [], []
         for (model, modelv), model_name, confmod, ioumod in zip(self.models, self.model_names, self.confs, self.ious):
             # Make a prediction with the current model
             raw_preds = []
@@ -91,7 +92,7 @@ class ObjectDetectorEnsemble:
             
             if modelv == "yolov5": #NEED TO CHECK FOR SAME ERROR AS YOLOV8 
                 for i in range(0, len(raw_preds)):
-                    print(raw_preds.xywhn[i][:, :4].cpu().numpy())
+                    #print(raw_preds.xywhn[i][:, :4].cpu().numpy())
                     
                     
                     boxes_mod.append(raw_preds.xywhn[i][:, :4].cpu().numpy())
@@ -107,12 +108,18 @@ class ObjectDetectorEnsemble:
                     scores_mod.append(result.conf.cpu().numpy())
                     labels_mod.append(result.cls.cpu().numpy())
 
+            boxes_list.append(boxes_mod)
+            scores_list.append(scores_mod)
+            labels_list.append(labels_mod)
+
             self.model_predictions.append((boxes_mod, scores_mod, labels_mod))
+        return boxes_list, scores_list, labels_list
             
 
     
     #runs predictions on all images in img_folder using self.ensemble to decide which method
     def predict(self, img_folder=None, gt_folder=None, predict_folders= []):
+        boxes_list, scores_list, labels_list = [], [], []
         if img_folder is None and predict_folders is None:
             assert("No predictions to work with! Both img_folder and predict folders are empty!")
         img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
@@ -126,7 +133,7 @@ class ObjectDetectorEnsemble:
         if img_folder is not None:
             img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
             if len(predict_folders) == 0:
-                self.run_models(img_paths=img_paths)
+                boxes_list, scores_list, labels_list =self.run_models(img_paths=img_paths)
 
                 #img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
                 #boxes_list, scores_list, labels_list  = self.model_predictions[0]
@@ -173,8 +180,11 @@ class ObjectDetectorEnsemble:
         #Iterates over the list of ensembles
         ensembles = self.ensemble_methods
         for ensemble in ensembles:
+            print(ensemble)
+            #print(self.model_predictions[0])
             self.ensemble_methods = ensemble
             eboxes, escores, elabels = self.run_ensemble(img_shapes_list, boxes_list, scores_list, labels_list, img_folder)
+            #print(eboxes, escores, elabels)
             ensembleResult = Ensemble(ensemble, (eboxes, escores, elabels))
             self.ensemble_results.append(ensembleResult)
         self.ensemble_methods =ensembles
@@ -187,7 +197,7 @@ class ObjectDetectorEnsemble:
         result_bboxes, result_scores, result_labels = [], [],[]
         #for each first img predictions from each model, should iterate once for each i images.
         for model_predictions_boxes, model_predictions_scores, model_predictions_labels in zip(zip(*boxes_list), zip(*scores_list), zip(*labels_list)):
-            print(f"Doing {self.ensemble_methods} on image {j}")
+            #(f"Doing {self.ensemble_methods} on image {j}")
             bboxes= []
             scores= []
             labels=[]
@@ -197,14 +207,16 @@ class ObjectDetectorEnsemble:
                 height = img_shapes_list[j][0]
 
                 boxes= model_predictions_boxes[i].tolist()
-
-                norm_boxes = [[coord / width if idx % 2 == 0 else coord / height for idx, coord in enumerate(coords)]for coords in boxes]
-
-                bboxes += [norm_boxes]
-                scores += [model_predictions_scores[i].tolist()]
-                labels += [model_predictions_labels[i].tolist()]
-
+                
+                #norm_boxes = [[coord / width if idx % 2 == 0 else coord / height for idx, coord in enumerate(coords)]for coords in boxes]
+                #print(len(model_predictions_boxes[i].tolist()))
+                if len(boxes) != 0:
+                    bboxes += [boxes]
+                    scores += [model_predictions_scores[i].tolist()]
+                    labels += [model_predictions_labels[i].tolist()]
+                
             j+=1
+            
             bboxes, scores, labels = self.pick_ensemble(bboxes, scores, labels)
             
             
@@ -212,7 +224,7 @@ class ObjectDetectorEnsemble:
             result_labels.append(labels)
             result_scores.append(scores)
         
-        result_bboxes = self.denormalize_bboxes_array(result_bboxes, img_shapes_list)
+        #result_bboxes = self.denormalize_bboxes_array(result_bboxes, img_shapes_list)
         #print(result_bboxes)
         #UNCOMMENT TO SHOW IMGS
         #img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
@@ -244,6 +256,7 @@ class ObjectDetectorEnsemble:
             combined_preds = np.column_stack((bboxes, scores, labels))
 
         elif self.ensemble_methods == 'soft-nms':
+            
             bboxes, scores, labels = soft_nms(bboxes, scores, labels, method=2, iou_thr=self.iou)
             combined_preds = np.column_stack((bboxes, scores, labels))
         elif self.ensemble_methods == 'nmw':
@@ -353,6 +366,7 @@ class ObjectDetectorEnsemble:
             ensembles.append(ensemble.predictions)
         
         #print(len(self.model_predictions[0]))
+        #print("ENSEMBLES")
         #print(ensembles)
         
         conf_thresholds =np.linspace(0, 1, 101)
@@ -397,8 +411,8 @@ class ObjectDetectorEnsemble:
             #print(filename)
             shape = cv2.imread(img_path).shape[:2]
             img_height, img_width = shape
-            print("shape")
-            print(img_height, img_width)
+            #print("shape")
+            #print(img_height, img_width)
 
             coco_image = {
                 'id': image_id,
@@ -414,8 +428,8 @@ class ObjectDetectorEnsemble:
                 #print("prebox before conversion")
                 #print(box)
                 coco_box = self.yolo_to_coco(box, img_height=img_height, img_width=img_width)
-                print("pred")
-                print(coco_box)
+                #print("pred")
+                #print(coco_box)
                 _, _, width, height = coco_box
                 coco_predictions.append({
                     'image_id': image_id,
@@ -433,8 +447,8 @@ class ObjectDetectorEnsemble:
                 
                 area = width * height
                 
-                print("GT")
-                print([x, y, width, height])
+                #print("GT")
+                #print([x, y, width, height])
                 #print(x, y, width, height)
                 #print(gt_labels[i][j])
                 coco_ground_truth.append({
