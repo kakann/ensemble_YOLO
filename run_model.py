@@ -215,21 +215,33 @@ class ObjectDetectorEnsemble:
                     scores += [model_predictions_scores[i].tolist()]
                     labels += [model_predictions_labels[i].tolist()]
                 
-            j+=1
+            
             #Converting to coco which the ensemble functions require
             coco_boxes = []
+            print(f"prediction index {j}")
             for boxes in bboxes:
                 coco_boxes.append([self.yolo_to_coco_norm(box) for box in boxes])
             
+            img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
+            print("before coco, with yolo")
+            self.box_imgs("ensemble_before", bboxes, scores, labels, "test_out", img_paths=[img_paths[j]], format="yolo")
+            
+            print(bboxes)
+            #self.box_imgs("ensemble_test", coco_boxes, scores, labels, "test_out", img_paths=img_paths, format="coco")
             bboxes, scores, labels = self.pick_ensemble(coco_boxes, scores, labels)
+           
+            #self.box_imgs("ensemble_test", [bboxes], [scores], [labels], "test_out", img_paths=img_paths, format="coco")
             #converting back
             yolo_boxes = []
             for box in bboxes:
                 yolo_boxes.append(self.coco_to_yolo_norm(box))
+            print("after ensembling")
+            self.box_imgs("ensemble_after", [yolo_boxes], [scores], [labels], "test_out", img_paths=[img_paths[j]], format="yolo")
             
             result_bboxes.append(yolo_boxes)
             result_labels.append(labels)
             result_scores.append(scores)
+            j+=1
         
         #result_bboxes = self.denormalize_bboxes_array(result_bboxes, img_shapes_list)
         #print(result_bboxes)
@@ -238,6 +250,21 @@ class ObjectDetectorEnsemble:
         #self.box_imgs(model_name="YOLOV8", bboxes=result_bboxes, labels=result_labels, scores=result_scores, output_folder="test_out", img_paths=img_paths)
         return result_bboxes, result_scores, result_scores
     
+    def coco_to_xyxy(self, coco_bbox):
+        x_min, y_min, width, height = coco_bbox
+        x_max = x_min + width
+        y_max = y_min + height
+
+        return [x_min, y_min, x_max, y_max]
+
+    def yolo_to_xyxy(self, yolo_bbox):
+        x_center, y_center, width, height = yolo_bbox
+        x_min = x_center - width / 2
+        y_min = y_center - height / 2
+        x_max = x_center + width / 2
+        y_max = y_center + height / 2
+
+        return [x_min, y_min, x_max, y_max]
     def yolo_to_coco_norm(self, yolo_bbox):
         x_center, y_center, width, height = yolo_bbox
         x_min = x_center - width / 2
@@ -297,19 +324,36 @@ class ObjectDetectorEnsemble:
             subprocess.run(['python', 'program.py'])
         return bboxes, scores, labels
         
-    def box_imgs(self, model_name, bboxes, scores, labels, output_folder, img_paths):
+    def box_imgs(self, model_name, bboxes, scores, labels, output_folder, img_paths, format="yolo"):
+        #format can be "yolo", "coco" or "xyxy"
         import pathlib
         pathlib.Path(f"{output_folder}/{model_name}").mkdir(parents=True, exist_ok=True) 
         #os.mkdir(f"test_out/{model_name}")
         i =0
         for img, bboxes_img, scores_img, labels_img in zip(img_paths, bboxes, scores, labels):
+            height, width =cv2.imread(img).shape[:2]
             img1 = cv2.imread(img)
             if img1 is None:
                 print(f"Failed to read image: {img}")
                 continue
             annotator = Annotator(img1)
+            
             for bbox, score, label in zip(bboxes_img, scores_img, labels_img):# borde baseras på i vilket det inte göra tam
-
+                if format == "yolo":
+                    bbox = self.yolo_to_xyxy(bbox)
+                elif format == "coco":
+                    bbox = self.coco_to_xyxy(bbox)
+                elif format == "xyxy":
+                    continue
+                else:
+                    assert(f"Formats allowed: yolo, coco or xyxy. Format {format} not allowed!")
+                
+                x1, y1, x2, y2 = bbox
+                x1 *=width
+                x2 *= width
+                y1 *= height
+                y2 *= height
+                bbox = x1, y1, x2, y2
                 annotator.box_label(box=bbox, label=f"{label} {score}", )
             
             cv2.imshow('image',img1)
@@ -389,24 +433,15 @@ class ObjectDetectorEnsemble:
         for ensemble in self.ensemble_results:
             ensembles.append(ensemble.predictions)
 
-        conf_thresholds =np.linspace(0, 1, 101)
         gt_boxes, gt_labels = self.gts
-        #print(self.gts)
         for model_name, data in zip(self.model_names +self.ensemble_methods , self.model_predictions + ensembles): #+ ensembles)
-            #print(self.model_predictions[0][2])
             pred_boxes, pred_scores, pred_labels = data
             print(model_name)
-            #print(data[2])
+
             pred_boxes = data[0]
             pred_scores = data[1]
             pred_labels = data[2]
-            #print(pred_boxes)
-            #print("OREDPSDASD")
-            #print(pred_boxes)
-            
-            
 
-            
             self.eval_model(self.img_paths, pred_boxes, pred_labels, pred_scores, gt_boxes, gt_labels)
             
 
@@ -428,11 +463,8 @@ class ObjectDetectorEnsemble:
         for i, img_path in enumerate(img_paths):
             image_id = i
             filename = img_path.split('/')[-1]
-            #print(filename)
             shape = cv2.imread(img_path).shape[:2]
             img_height, img_width = shape
-            #print("shape")
-            #print(img_height, img_width)
 
             coco_image = {
                 'id': image_id,
@@ -448,8 +480,8 @@ class ObjectDetectorEnsemble:
                 #print("prebox before conversion")
                 #print(box)
                 coco_box = self.yolo_to_coco(box, img_height=img_height, img_width=img_width)
-                print("pred")
-                print(coco_box)
+                #print("pred")
+                #print(coco_box)
                 _, _, width, height = coco_box
                 coco_predictions.append({
                     'image_id': image_id,
@@ -467,10 +499,8 @@ class ObjectDetectorEnsemble:
                 
                 area = width * height
                 
-                print("GT")
-                print([x, y, width, height])
-                #print(x, y, width, height)
-                #print(gt_labels[i][j])
+                #print("GT")
+                #print([x, y, width, height])
                 coco_ground_truth.append({
                     'id': gt_id,
                     'image_id': image_id,
