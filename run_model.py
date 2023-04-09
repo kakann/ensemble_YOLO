@@ -237,6 +237,7 @@ class ObjectDetectorEnsemble:
                 yolo_boxes.append(self.coco_to_yolo_norm(box))
             print("after ensembling")
             self.box_imgs("ensemble_after", [yolo_boxes], [scores], [labels], "test_out", img_paths=[img_paths[j]], format="yolo")
+            #SOMETHING IS OFF HERE IDK WHAT, OR SOMETHINS HAPPEN LATER TODO!!!
             
             result_bboxes.append(yolo_boxes)
             result_labels.append(labels)
