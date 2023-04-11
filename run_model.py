@@ -222,34 +222,25 @@ class ObjectDetectorEnsemble:
             for boxes in bboxes:
                 coco_boxes.append([self.yolo_to_coco_norm(box) for box in boxes])
             
-            img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
-            print("before coco, with yolo")
-            self.box_imgs("ensemble_before", bboxes, scores, labels, "test_out", img_paths=[img_paths[j]], format="yolo")
             
-            print(bboxes)
-            #self.box_imgs("ensemble_test", coco_boxes, scores, labels, "test_out", img_paths=img_paths, format="coco")
+
             bboxes, scores, labels = self.pick_ensemble(coco_boxes, scores, labels)
-           
-            #self.box_imgs("ensemble_test", [bboxes], [scores], [labels], "test_out", img_paths=img_paths, format="coco")
-            #converting back
+
             yolo_boxes = []
             for box in bboxes:
                 yolo_boxes.append(self.coco_to_yolo_norm(box))
-            print("after ensembling")
-            self.box_imgs("ensemble_after", [yolo_boxes], [scores], [labels], "test_out", img_paths=[img_paths[j]], format="yolo")
-            #SOMETHING IS OFF HERE IDK WHAT, OR SOMETHINS HAPPEN LATER TODO!!!
             
             result_bboxes.append(yolo_boxes)
-            result_labels.append(labels)
             result_scores.append(scores)
+            result_labels.append(labels)
+            
             j+=1
         
-        #result_bboxes = self.denormalize_bboxes_array(result_bboxes, img_shapes_list)
-        #print(result_bboxes)
+        
         #UNCOMMENT TO SHOW IMGS
         #img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
         #self.box_imgs(model_name="YOLOV8", bboxes=result_bboxes, labels=result_labels, scores=result_scores, output_folder="test_out", img_paths=img_paths)
-        return result_bboxes, result_scores, result_scores
+        return result_bboxes, result_scores, result_labels
     
     def coco_to_xyxy(self, coco_bbox):
         x_min, y_min, width, height = coco_bbox
@@ -325,7 +316,7 @@ class ObjectDetectorEnsemble:
             subprocess.run(['python', 'program.py'])
         return bboxes, scores, labels
         
-    def box_imgs(self, model_name, bboxes, scores, labels, output_folder, img_paths, format="yolo"):
+    def box_imgs(self, model_name, bboxes, scores, labels, output_folder, img_paths, format="yolo", norm=True):
         #format can be "yolo", "coco" or "xyxy"
         import pathlib
         pathlib.Path(f"{output_folder}/{model_name}").mkdir(parents=True, exist_ok=True) 
@@ -348,13 +339,13 @@ class ObjectDetectorEnsemble:
                     continue
                 else:
                     assert(f"Formats allowed: yolo, coco or xyxy. Format {format} not allowed!")
-                
                 x1, y1, x2, y2 = bbox
-                x1 *=width
-                x2 *= width
-                y1 *= height
-                y2 *= height
-                bbox = x1, y1, x2, y2
+                if norm:
+                    x1 *=width
+                    x2 *= width
+                    y1 *= height
+                    y2 *= height
+                    bbox = x1, y1, x2, y2
                 annotator.box_label(box=bbox, label=f"{label} {score}", )
             
             cv2.imshow('image',img1)
@@ -478,11 +469,8 @@ class ObjectDetectorEnsemble:
                 
             
             for j, box in enumerate(pred_boxes[i]):
-                #print("prebox before conversion")
-                #print(box)
                 coco_box = self.yolo_to_coco(box, img_height=img_height, img_width=img_width)
-                #print("pred")
-                #print(coco_box)
+            
                 _, _, width, height = coco_box
                 coco_predictions.append({
                     'image_id': image_id,
@@ -495,13 +483,11 @@ class ObjectDetectorEnsemble:
             
             for j, box in enumerate(gt_boxes[i]):
                 coco_box = box
-                #coco_box = self.convert_to_coco_format(coco_box)
                 x, y, width, height = self.yolo_to_coco(box, img_height=img_height, img_width=img_width)
                 
                 area = width * height
                 
-                #print("GT")
-                #print([x, y, width, height])
+
                 coco_ground_truth.append({
                     'id': gt_id,
                     'image_id': image_id,
