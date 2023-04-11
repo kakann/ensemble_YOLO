@@ -164,7 +164,6 @@ class ObjectDetectorEnsemble:
             gt_paths = [os.path.join(gt_folder, f) for f in os.listdir(gt_folder) if f.endswith('.txt') or f.endswith('.xml')]
             bbox_list, label_list = [], []
             for file in gt_paths:
-                #ALREADY IN COCO FORMAT HERE
                 bboxes, labels = self.read_yolo_groundtruth_file(file)
                 bbox_list.append(bboxes)
                 label_list.append(labels)
@@ -273,22 +272,7 @@ class ObjectDetectorEnsemble:
         x_center = x_min + width / 2
         y_center = y_min + height / 2
 
-        return [x_center, y_center, width, height]
-
-    def denormalize_bboxes_array(self, bboxes_array, img_shapes):
-        denormalized_bboxes_array = []
-        for bboxes, (original_height, original_width) in zip(bboxes_array, img_shapes):
-            denormalized_bboxes = []
-            for bbox in bboxes:
-                x1, y1, x2, y2 = bbox
-                x1 = x1 * original_width
-                y1 = y1 * original_height
-                x2 = x2 * original_width
-                y2 = y2 * original_height
-                denormalized_bbox = [x1, y1, x2, y2]
-                denormalized_bboxes.append(denormalized_bbox)
-            denormalized_bboxes_array.append(np.array(denormalized_bboxes))
-        return denormalized_bboxes_array        
+        return [x_center, y_center, width, height]      
     
     #picks and runs ensemble on ONE img
     #should return the new bboxes, labels, and scores for that img TBC!!
@@ -377,12 +361,8 @@ class ObjectDetectorEnsemble:
                 label, x_center, y_center, width, height, score = int(data[0]), float(data[1]), float(data[2]), float(data[3]), float(data[4]), float(data[5])
                 
                 # Convert x_center, y_center, width, height to xmin, ymin, xmax, ymax
-                xmin = x_center - width / 2
-                ymin = y_center - height / 2
-                xmax = x_center + width / 2
-                ymax = y_center + height / 2
                 
-                boxes.append([xmin, ymin, xmax, ymax])
+                boxes.append([x_center, y_center, width, height])
                 scores.append(score)
                 labels.append(label)
         
@@ -520,14 +500,62 @@ class ObjectDetectorEnsemble:
         #print("Predictions:", len(dt_coco.dataset['annotations']))
         #print("Examples:", dt_coco.dataset['annotations'][:5])
         coco_eval = COCOeval(gt_coco, dt_coco, iouType='bbox')
+        coco_eval.params.iouThrs = np.linspace(0.1, 0.95, num=18)
+
+        # Set new area range and max detections per image
+        #new_area_ranges = [[0 ** 2, 1e5 ** 2]]  # Single area range covering all sizes
+        #new_max_detections = [15, 15, 15]  # Max 15 detections per image
+
+        #coco_eval.params.areaRng = new_area_ranges
+        #coco_eval.params.maxDets = new_max_detections
 
         coco_eval.evaluate()
         coco_eval.accumulate()
         coco_eval.summarize()
 
-        precision = coco_eval.stats[0]
-        recall = coco_eval.stats[1]
-        f1_score = 2 * (precision * recall) / (precision + recall)
+        iou_thresholds = coco_eval.params.iouThrs
+        conf_thresholds = coco_eval.params.recThrs
+        precision = coco_eval.eval['precision']
+        recall = coco_eval.eval['recall']
+        confidences = coco_eval.eval['scores']
+        print(precision.shape)
+        print(recall.shape)
+        
+        TP = recall * precision.shape[1]
+        FN = precision.shape[1] - TP
+
+        # Calculate recall at each confidence level
+        recall_at_confidence = np.zeros((precision.shape[0], precision.shape[1], precision.shape[2], precision.shape[3], precision.shape[4]))
+
+        for t in range(precision.shape[0]):
+            for r in range(precision.shape[1]):
+                for k in range(precision.shape[2]):
+                    for a in range(precision.shape[3]):
+                        for m in range(precision.shape[4]):
+                            tp = TP[t, k, a, m]
+                            fn = FN[t, k, a, m]
+                            recall_at_confidence[t, r, k, a, m] = tp / (tp + fn + 1e-6)
+        print(recall_at_confidence.shape)
+        
+        f1_scores_confidences = []
+        #describes the iou value where the highest f1 range for prediction recide.
+        iou_index_max_conf = 0
+        max_f1= 0
+        for iou in range(precision.shape[0]):
+            iou_f1 = []
+            for i in range(precision.shape[1]):
+                p = np.mean(precision[iou, i, 0, :, 0])
+                r = np.mean(recall_at_confidence[iou, i, 0, :, 0])
+                f1 =  (2 * p *  r)/(p+r)
+                iou_f1.append(f1)
+                if f1 > max_f1:
+                    max_f1 = f1
+                    iou_index_max_conf =iou
+            f1_scores_confidences.append(iou_f1)
+
+        # Create a list of confidence levels.
+        confidence_levels = np.linspace(0, 1, 101)
+        return max_f1, iou_index_max_conf, confidence_levels, f1_scores_confidences
     
     def yolo_to_coco(self, yolo_bbox, img_width, img_height):
         x_center, y_center, width, height = yolo_bbox
