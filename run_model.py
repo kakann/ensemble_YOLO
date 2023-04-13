@@ -95,18 +95,18 @@ class ObjectDetectorEnsemble:
                     #print(raw_preds.xywhn[i][:, :4].cpu().numpy())
                     
                     
-                    boxes_mod.append(raw_preds.xywhn[i][:, :4].cpu().numpy())
+                    boxes_mod.append(raw_preds.xywhn[i][:, :4].cpu().numpy().tolist())
                     
                     
                     #print(norm_boxes)
-                    scores_mod.append(raw_preds.pred[i][:, 4].cpu().numpy())
-                    labels_mod.append(raw_preds.pred[i][:, 5].cpu().numpy())
+                    scores_mod.append(raw_preds.pred[i][:, 4].cpu().numpy().tolist())
+                    labels_mod.append(raw_preds.pred[i][:, 5].cpu().numpy().tolist())
             if modelv == "yolov8":
                 for result in raw_preds:
                     result = result.boxes
-                    boxes_mod.append(result.xywhn.cpu().numpy()) # x1, y1, x2, y2
-                    scores_mod.append(result.conf.cpu().numpy())
-                    labels_mod.append(result.cls.cpu().numpy())
+                    boxes_mod.append(result.xywhn.cpu().numpy().tolist()) # x1, y1, x2, y2
+                    scores_mod.append(result.conf.cpu().numpy().tolist())
+                    labels_mod.append(result.cls.cpu().numpy().tolist())
 
             boxes_list.append(boxes_mod)
             scores_list.append(scores_mod)
@@ -118,10 +118,11 @@ class ObjectDetectorEnsemble:
 
     
     #runs predictions on all images in img_folder using self.ensemble to decide which method
-    def predict(self, img_folder=None, gt_folder=None, predict_folders= []):
+    def predict(self, img_folder, gt_folder=None, predict_folders= []):
         boxes_list, scores_list, labels_list = [], [], []
         if img_folder is None and predict_folders is None:
             assert("No predictions to work with! Both img_folder and predict folders are empty!")
+        
         img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
         img_shapes_list= []
         for img in img_paths:
@@ -134,11 +135,6 @@ class ObjectDetectorEnsemble:
             img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
             if len(predict_folders) == 0:
                 boxes_list, scores_list, labels_list =self.run_models(img_paths=img_paths)
-
-                #img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
-                #boxes_list, scores_list, labels_list  = self.model_predictions[0]
-                
-                #self.box_imgs(model_name="YOLOV8asdsdasda", bboxes=boxes_list, labels=labels_list, scores=scores_list, output_folder="test_out", img_paths=img_paths)
 
             self.img_paths = img_paths
         #Calculate all img shapes(width, height)
@@ -158,6 +154,9 @@ class ObjectDetectorEnsemble:
                     scoresp.append(scores)
                     labelsp.append(labels)
                 self.model_predictions.append((boxesp, scoresp, labelsp))
+                boxes_list.append(boxesp)
+                scores_list.append(scoresp)
+                labels_list.append(labelsp)
 
         #if there are groundtruths attatched, read them. They will be used for producing statistics later.
         if gt_folder is not None:
@@ -204,20 +203,19 @@ class ObjectDetectorEnsemble:
             for i in range(len(model_predictions_boxes)):
                 width = img_shapes_list[j][1]
                 height = img_shapes_list[j][0]
-
-                boxes= model_predictions_boxes[i].tolist()
+                #print(model_predictions_boxes[i].shape)
+                boxes= model_predictions_boxes[i]
                 
                 #norm_boxes = [[coord / width if idx % 2 == 0 else coord / height for idx, coord in enumerate(coords)]for coords in boxes]
                 #print(len(model_predictions_boxes[i].tolist()))
                 if len(boxes) != 0:
                     bboxes += [boxes]
-                    scores += [model_predictions_scores[i].tolist()]
-                    labels += [model_predictions_labels[i].tolist()]
+                    scores += [model_predictions_scores[i]]
+                    labels += [model_predictions_labels[i]]
                 
             
             #Converting to coco which the ensemble functions require
             coco_boxes = []
-            print(f"prediction index {j}")
             for boxes in bboxes:
                 coco_boxes.append([self.yolo_to_coco_norm(box) for box in boxes])
             
@@ -358,9 +356,8 @@ class ObjectDetectorEnsemble:
         with open(prediction_file, 'r') as file:
             for line in file.readlines():
                 data = line.strip().split(' ')
+                #print(data)
                 label, x_center, y_center, width, height, score = int(data[0]), float(data[1]), float(data[2]), float(data[3]), float(data[4]), float(data[5])
-                
-                # Convert x_center, y_center, width, height to xmin, ymin, xmax, ymax
                 
                 boxes.append([x_center, y_center, width, height])
                 scores.append(score)
@@ -399,12 +396,28 @@ class ObjectDetectorEnsemble:
         #if format == "yolo":
         #    for xml in xml_file_paths:
 
+
+    def get_next_folder_name(self, base_dir, folder_prefix):
+        i = 0
+        while True:
+            folder_name = f"{folder_prefix}{i}"
+            folder_path = os.path.join(base_dir, folder_name)
+            if not os.path.exists(folder_path):
+                return folder_path
+            i += 1
+
     def compare_models(self):
         plt.figure(figsize=(10, 7))
         ensembles = []
         for ensemble in self.ensemble_results:
             ensembles.append(ensemble.predictions)
 
+        base_dir = os.getcwd()
+        folder_prefix = "test_out"
+        test_out_dir = self.get_next_folder_name(base_dir, folder_prefix)
+        os.makedirs(test_out_dir, exist_ok=True)
+
+        f1_data = []
         gt_boxes, gt_labels = self.gts
         for model_name, data in zip(self.model_names +self.ensemble_methods , self.model_predictions + ensembles): #+ ensembles)
             pred_boxes, pred_scores, pred_labels = data
@@ -414,24 +427,42 @@ class ObjectDetectorEnsemble:
             pred_scores = data[1]
             pred_labels = data[2]
 
-            self.eval_model(self.img_paths, pred_boxes, pred_labels, pred_scores, gt_boxes, gt_labels)
+            f1_scores, confidence_scores = self.eval_model(self.img_paths, pred_boxes, pred_labels, pred_scores, gt_boxes, gt_labels)
+
+            model_dir = os.path.join(test_out_dir, model_name)
+            os.makedirs(model_dir, exist_ok=True)
+
+            # Plot and save the F1 scores for each IoU threshold
+            for iou_idx in range(f1_scores.shape[1]):
+                plt.plot(confidence_scores, f1_scores[:, iou_idx], label=f"IoU {iou_idx}")
+
+                # Customize the plot
+                plt.xlabel('Confidence Threshold')
+                plt.ylabel('F1 Score')
+                plt.title(f'F1 Score vs Confidence Threshold for IoU {iou_idx}')
+                plt.legend()
+                plt.grid()
+
+                plt.xlim(0, 1)
+                plt.ylim(0, 1)
+
+                # Save the plot
+                plot_filename = os.path.join(model_dir, f"IoU{iou_idx}.png")
+                plt.savefig(plot_filename)
+
+                # Clear the plot for the next iteration
+                plt.clf()
             
 
-        plt.xlabel('Recall')
-        plt.ylabel('Precision')
-        plt.title('Precision-Recall Curves')
-        plt.legend(loc='lower left')
-        plt.grid()
-        plt.show()
-        plt.savefig('test.png')
-   
-    def eval_model(self, img_paths, pred_boxes, pred_labels, pred_scores, gt_boxes, gt_labels):
+
+
+    def create_coco_dict(self, img_paths, pred_boxes, pred_labels, pred_scores, gt_boxes, gt_labels):
         coco_predictions = []
         coco_ground_truth = []
         images = []
 
         gt_id = 0
-
+        print(f"len of predict= {len(pred_boxes)}")
         for i, img_path in enumerate(img_paths):
             image_id = i
             filename = img_path.split('/')[-1]
@@ -486,6 +517,11 @@ class ObjectDetectorEnsemble:
             {'id': 2, 'name': 'D20'},
             {'id': 3, 'name': 'D40'}
         ]
+        return coco_ground_truth, images, categories, coco_predictions
+   
+    def eval_model(self, img_paths, pred_boxes, pred_labels, pred_scores, gt_boxes, gt_labels):
+        
+        coco_ground_truth, images, categories, coco_predictions = self.create_coco_dict(img_paths, pred_boxes, pred_labels, pred_scores, gt_boxes, gt_labels)
 
         gt_coco = COCO()
         gt_coco.dataset = {'annotations': coco_ground_truth, 'images': images, 'categories': categories}
@@ -512,50 +548,10 @@ class ObjectDetectorEnsemble:
         coco_eval.evaluate()
         coco_eval.accumulate()
         coco_eval.summarize()
+        confidence_scores = np.unique(coco_eval.eval['scores'])
+        return self.calculate_f1_scores(coco_eval), confidence_scores
 
-        iou_thresholds = coco_eval.params.iouThrs
-        conf_thresholds = coco_eval.params.recThrs
-        precision = coco_eval.eval['precision']
-        recall = coco_eval.eval['recall']
-        confidences = coco_eval.eval['scores']
-        print(precision.shape)
-        print(recall.shape)
         
-        TP = recall * precision.shape[1]
-        FN = precision.shape[1] - TP
-
-        # Calculate recall at each confidence level
-        recall_at_confidence = np.zeros((precision.shape[0], precision.shape[1], precision.shape[2], precision.shape[3], precision.shape[4]))
-
-        for t in range(precision.shape[0]):
-            for r in range(precision.shape[1]):
-                for k in range(precision.shape[2]):
-                    for a in range(precision.shape[3]):
-                        for m in range(precision.shape[4]):
-                            tp = TP[t, k, a, m]
-                            fn = FN[t, k, a, m]
-                            recall_at_confidence[t, r, k, a, m] = tp / (tp + fn + 1e-6)
-        print(recall_at_confidence.shape)
-        
-        f1_scores_confidences = []
-        #describes the iou value where the highest f1 range for prediction recide.
-        iou_index_max_conf = 0
-        max_f1= 0
-        for iou in range(precision.shape[0]):
-            iou_f1 = []
-            for i in range(precision.shape[1]):
-                p = np.mean(precision[iou, i, 0, :, 0])
-                r = np.mean(recall_at_confidence[iou, i, 0, :, 0])
-                f1 =  (2 * p *  r)/(p+r)
-                iou_f1.append(f1)
-                if f1 > max_f1:
-                    max_f1 = f1
-                    iou_index_max_conf =iou
-            f1_scores_confidences.append(iou_f1)
-
-        # Create a list of confidence levels.
-        confidence_levels = np.linspace(0, 1, 101)
-        return max_f1, iou_index_max_conf, confidence_levels, f1_scores_confidences
     
     def yolo_to_coco(self, yolo_bbox, img_width, img_height):
         x_center, y_center, width, height = yolo_bbox
@@ -581,3 +577,95 @@ class ObjectDetectorEnsemble:
         # Return the COCO format bounding box [x_min, y_min, width, height]
         return [x_min, y_min, width, height]
     
+
+
+    def calculate_f1_scores(self, coco_eval):
+        # Extract precision, recall, and scores from coco_eval
+        precision = coco_eval.eval['precision']
+        recall = coco_eval.eval['recall']
+        scores = coco_eval.eval['scores']
+
+        # Calculate the mean precision and recall across all categories (axis=2) and area ranges (axis=3)
+        mean_precision = np.mean(precision, axis=(2, 3))  # Shape: (T, R, K)
+        mean_recall = np.mean(recall, axis=(2, 3))  # Shape: (T, R, K)
+
+        # Initialize lists to store F1 scores for each confidence level
+        f1_scores = []
+
+        # Iterate through the sorted unique confidence scores
+        for confidence in np.unique(scores):
+            # Find the index of the first recall value greater than or equal to the current confidence
+            recall_idx = np.argmax(mean_recall >= confidence, axis=1)
+
+            # Calculate the corresponding precision values for the chosen recall index
+            precision_at_confidence = mean_precision[np.arange(mean_precision.shape[0]), recall_idx, :]
+
+            # Calculate the F1 scores for each max detections value
+            f1_at_confidence = 2 * (precision_at_confidence * confidence) / (precision_at_confidence + confidence)
+
+            # Calculate the mean F1 score across max detections values
+            mean_f1_at_confidence = np.mean(f1_at_confidence, axis=1)
+
+            # Append the mean F1 score to the list
+            f1_scores.append(mean_f1_at_confidence)
+
+        # Convert the list of F1 scores to a NumPy array
+        f1_scores = np.array(f1_scores)
+
+        print(f1_scores.shape)
+        return f1_scores # (N, T) where N is conf scores, and T is the number of IoU thresholds.
+    
+
+
+
+    def graveyard():
+        iou_thresholds = coco_eval.params.iouThrs
+        conf_thresholds = coco_eval.params.recThrs
+        precision = coco_eval.eval['precision']
+        recall = coco_eval.eval['recall']
+        confidences = coco_eval.eval['scores']
+        print(precision.shape)
+        print(recall.shape)
+        
+        TP = recall * precision.shape[1]
+        FN = precision.shape[1] - TP
+
+        # Calculate recall at each confidence level
+        recall_at_confidence = np.zeros((precision.shape[0], precision.shape[1], precision.shape[2], precision.shape[3], precision.shape[4]))
+
+        for t in range(precision.shape[0]):
+            for r in range(precision.shape[1]):
+                for k in range(precision.shape[2]):
+                    for a in range(precision.shape[3]):
+                        for m in range(precision.shape[4]):
+                            tp = TP[t, k, a, m]
+                            fn = FN[t, k, a, m]
+                            recall_at_confidence[t, r, k, a, m] = tp / (tp + fn + 1e-6)
+        print(recall_at_confidence.shape)
+        
+        F1 = 2 * (precision * recall_at_confidence) / (precision + recall_at_confidence)
+        print(F1.shape)
+        f1_scores_confidences = []
+        #describes the iou value where the highest f1 range for prediction recide.
+        iou_index_max_conf = 0
+        max_f1= 0
+        for iou in range(precision.shape[0]):
+            iou_f1 = []
+            for i in range(precision.shape[1]):
+                p = np.mean(precision[iou, i, 0, :, 0])
+                r = np.mean(recall_at_confidence[iou, i, 0, :, 0])
+                f1 =  (2 * p *  r)/(p+r)
+                iou_f1.append(f1)
+                if f1 > max_f1:
+                    max_f1 = f1
+                    iou_index_max_conf =iou
+            f1_scores_confidences.append(iou_f1)
+
+        # Create a list of confidence levels.
+        confidence_levels = np.linspace(0, 1, 101)
+        #print(f1_scores_confidences.shape)
+        #print(max_f1)
+        #print(iou_index_max_conf)
+        #print(confidence_levels)
+        #print(F1)
+        return max_f1, iou_index_max_conf, confidence_levels, F1

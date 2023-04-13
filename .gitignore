@@ -6,3 +6,8 @@ ensemble
 test_input/*
 cocoapi
 test_gts
+test_gt/
+test_out0/
+test_out1/
+test_pred_folder/
+test_pred_folder_copy/
