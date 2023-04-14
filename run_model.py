@@ -37,7 +37,7 @@ class EnsembleResults:
         
 
 class ObjectDetectorEnsemble:
-    def __init__(self, models, confs, ious, ensemble_methods=["nms"], conf=0.4, iou=0.6, tta=True):
+    def __init__(self, models, confs = [], ious = [], ensemble_methods=["nms"], conf=0.4, iou=0.6, tta=True):
         self.models = []
         self.model_predictions = [] # list of tuples. Each tuples is bboxes, scores, labels
         self.ensemble_methods = ensemble_methods
@@ -283,15 +283,15 @@ class ObjectDetectorEnsemble:
 
         elif self.ensemble_methods == 'soft-nms':
             
-            bboxes, scores, labels = soft_nms(bboxes, scores, labels, method=2, iou_thr=self.iou)
+            bboxes, scores, labels = soft_nms(bboxes, scores, labels, method=2, iou_thr=self.iou, thresh=self.conf)
             combined_preds = np.column_stack((bboxes, scores, labels))
         elif self.ensemble_methods == 'nmw':
 
-            bboxes, scores, labels = non_maximum_weighted(bboxes, scores, labels, iou_thr=self.iou)
+            bboxes, scores, labels = non_maximum_weighted(bboxes, scores, labels, iou_thr=self.iou, skip_box_thr=self.conf)
             combined_preds = np.column_stack((bboxes, scores, labels))
         elif self.ensemble_methods == 'wbf':
 
-            bboxes, scores, labels = weighted_boxes_fusion(bboxes, scores, labels, iou_thr=self.iou)
+            bboxes, scores, labels = weighted_boxes_fusion(bboxes, scores, labels, iou_thr=self.iou, skip_box_thr=self.conf)
             combined_preds = np.column_stack((bboxes, scores, labels))
         elif self.ensemble_methods == "OBB": #DOES NOT WORK ATM, NEEDS FIX
             #bboxes, scores, labels = [], [], []
@@ -427,31 +427,8 @@ class ObjectDetectorEnsemble:
             pred_scores = data[1]
             pred_labels = data[2]
 
-            f1_scores, confidence_scores = self.eval_model(self.img_paths, pred_boxes, pred_labels, pred_scores, gt_boxes, gt_labels)
-
-            model_dir = os.path.join(test_out_dir, model_name)
-            os.makedirs(model_dir, exist_ok=True)
-
-            # Plot and save the F1 scores for each IoU threshold
-            for iou_idx in range(f1_scores.shape[1]):
-                plt.plot(confidence_scores, f1_scores[:, iou_idx], label=f"IoU {iou_idx}")
-
-                # Customize the plot
-                plt.xlabel('Confidence Threshold')
-                plt.ylabel('F1 Score')
-                plt.title(f'F1 Score vs Confidence Threshold for IoU {iou_idx}')
-                plt.legend()
-                plt.grid()
-
-                plt.xlim(0, 1)
-                plt.ylim(0, 1)
-
-                # Save the plot
-                plot_filename = os.path.join(model_dir, f"IoU{iou_idx}.png")
-                plt.savefig(plot_filename)
-
-                # Clear the plot for the next iteration
-                plt.clf()
+            self.eval_model(self.img_paths, pred_boxes, pred_labels, pred_scores, gt_boxes, gt_labels)
+            
             
 
 
@@ -536,7 +513,7 @@ class ObjectDetectorEnsemble:
         #print("Predictions:", len(dt_coco.dataset['annotations']))
         #print("Examples:", dt_coco.dataset['annotations'][:5])
         coco_eval = COCOeval(gt_coco, dt_coco, iouType='bbox')
-        coco_eval.params.iouThrs = np.linspace(0.1, 0.95, num=18)
+        #coco_eval.params.iouThrs = np.linspace(0.1, 0.95, num=18)
 
         # Set new area range and max detections per image
         #new_area_ranges = [[0 ** 2, 1e5 ** 2]]  # Single area range covering all sizes
@@ -548,8 +525,9 @@ class ObjectDetectorEnsemble:
         coco_eval.evaluate()
         coco_eval.accumulate()
         coco_eval.summarize()
-        confidence_scores = np.unique(coco_eval.eval['scores'])
-        return self.calculate_f1_scores(coco_eval), confidence_scores
+
+        #confidence_scores = np.unique(coco_eval.eval['scores'])
+        #return self.calculate_f1_scores(coco_eval), confidence_scores
 
         
     
@@ -578,42 +556,38 @@ class ObjectDetectorEnsemble:
         return [x_min, y_min, width, height]
     
 
-
+    # (101, 18)
     def calculate_f1_scores(self, coco_eval):
         # Extract precision, recall, and scores from coco_eval
         precision = coco_eval.eval['precision']
         recall = coco_eval.eval['recall']
-        scores = coco_eval.eval['scores']
 
-        # Calculate the mean precision and recall across all categories (axis=2) and area ranges (axis=3)
-        mean_precision = np.mean(precision, axis=(2, 3))  # Shape: (T, R, K)
-        mean_recall = np.mean(recall, axis=(2, 3))  # Shape: (T, R, K)
+        precision = precision[:, :, :, 3, 2] # T R K
+        recall = recall[:, :, 3, 2] # T K
 
-        # Initialize lists to store F1 scores for each confidence level
+        # Calculate mean precision and recall across all categories (axis=1)
+        mean_precision = np.mean(precision, axis=1) # T R 
+        mean_recall = np.mean(recall, axis=1) # T
+
         f1_scores = []
 
-        # Iterate through the sorted unique confidence scores
-        for confidence in np.unique(scores):
-            # Find the index of the first recall value greater than or equal to the current confidence
-            recall_idx = np.argmax(mean_recall >= confidence, axis=1)
+        conf_intervals = np.arange(0, 1.01, 0.01)
 
-            # Calculate the corresponding precision values for the chosen recall index
-            precision_at_confidence = mean_precision[np.arange(mean_precision.shape[0]), recall_idx, :]
+        for confidence in conf_intervals:
+            recall_idx = np.argmax(mean_recall >= confidence, axis=0)
 
-            # Calculate the F1 scores for each max detections value
+            precision_at_confidence = mean_precision[np.arange(mean_precision.shape[0]), recall_idx]
+            #FEL PÅ RADEN UDNER
             f1_at_confidence = 2 * (precision_at_confidence * confidence) / (precision_at_confidence + confidence)
 
-            # Calculate the mean F1 score across max detections values
-            mean_f1_at_confidence = np.mean(f1_at_confidence, axis=1)
+            f1_scores.append(f1_at_confidence)
 
-            # Append the mean F1 score to the list
-            f1_scores.append(mean_f1_at_confidence)
-
-        # Convert the list of F1 scores to a NumPy array
         f1_scores = np.array(f1_scores)
-
         print(f1_scores.shape)
-        return f1_scores # (N, T) where N is conf scores, and T is the number of IoU thresholds.
+        return f1_scores
+
+
+
     
 
 
