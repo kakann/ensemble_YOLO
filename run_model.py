@@ -90,15 +90,9 @@ class ObjectDetectorEnsemble:
             scores_mod = []
             labels_mod = []
             
-            if modelv == "yolov5": #NEED TO CHECK FOR SAME ERROR AS YOLOV8 
+            if modelv == "yolov5": 
                 for i in range(0, len(raw_preds)):
-                    #print(raw_preds.xywhn[i][:, :4].cpu().numpy())
-                    
-                    
                     boxes_mod.append(raw_preds.xywhn[i][:, :4].cpu().numpy().tolist())
-                    
-                    
-                    #print(norm_boxes)
                     scores_mod.append(raw_preds.pred[i][:, 4].cpu().numpy().tolist())
                     labels_mod.append(raw_preds.pred[i][:, 5].cpu().numpy().tolist())
             if modelv == "yolov8":
@@ -118,7 +112,7 @@ class ObjectDetectorEnsemble:
 
     
     #runs predictions on all images in img_folder using self.ensemble to decide which method
-    def predict(self, img_folder, gt_folder=None, predict_folders= []):
+    def predict(self, img_folder, gt_folder=None, predict_folders= [], out_folder="test_out"):
         boxes_list, scores_list, labels_list = [], [], []
         if img_folder is None and predict_folders is None:
             assert("No predictions to work with! Both img_folder and predict folders are empty!")
@@ -187,6 +181,52 @@ class ObjectDetectorEnsemble:
             self.ensemble_results.append(ensembleResult)
         self.ensemble_methods =ensembles
 
+        ensembles = []
+        for ensemble in self.ensemble_results:
+            ensembles.append(ensemble.predictions)
+
+        base_dir = os.getcwd()
+        folder_prefix = f"{out_folder}_IoU:{self.iou}_Conf:{self.conf}"
+        test_out_dir = self.get_next_folder_name(base_dir, folder_prefix)
+        os.makedirs(test_out_dir, exist_ok=True)
+        
+        for model_name, data in zip(self.model_names +self.ensemble_methods , self.model_predictions + ensembles): #+ ensembles)
+            pred_boxes, pred_scores, pred_labels = data
+            folder = predict_folders[0]
+
+            pred_boxes = data[0]
+            pred_scores = data[1]
+            pred_labels = data[2]
+            model_out= os.path.join(test_out_dir, model_name)
+            os.makedirs(model_out)
+            pred_files = [os.path.join(folder, f) for f in os.listdir(folder) if f.endswith('.txt') or f.endswith('.xml')]
+            for boxes, scores, labels, file in zip(pred_boxes, pred_scores, pred_labels, pred_files):
+                file = file.split("/")[-1]
+                output_file = os.path.join(model_out, file)
+                final_boxes, final_labels = [], []
+
+                for ii, score in enumerate(scores):
+                    if score >= self.conf:
+                        final_boxes.append(boxes[ii])
+                        final_labels.append(labels[ii])
+
+                self.save_normalized_bboxes_to_file(output_file, file, final_boxes, final_labels)
+                
+                
+                    
+                
+
+                
+
+        
+    def save_normalized_bboxes_to_file(self, output_file, filename, norm_bboxes, labels):
+        with open(output_file, 'a') as f:
+            for norm_bbox, label in zip(norm_bboxes, labels):
+                x_center, y_center, width, height = norm_bbox
+                f.write(f"{label} {x_center} {y_center} {width} {height}\n")
+
+
+
 
 
     #Runs runs the result of each img on in ensemble
@@ -215,9 +255,12 @@ class ObjectDetectorEnsemble:
                 
             
             #Converting to coco which the ensemble functions require
+            
+            
             coco_boxes = []
             for boxes in bboxes:
-                coco_boxes.append([self.yolo_to_coco_norm(box) for box in boxes])
+                coco_boxes.append([self.yolo_to_xyxy(box) for box in boxes])
+            
             
             
 
@@ -225,7 +268,7 @@ class ObjectDetectorEnsemble:
 
             yolo_boxes = []
             for box in bboxes:
-                yolo_boxes.append(self.coco_to_yolo_norm(box))
+                yolo_boxes.append(self.xyxy_norm_to_yolo_norm(box))
             
             result_bboxes.append(yolo_boxes)
             result_scores.append(scores)
@@ -245,6 +288,16 @@ class ObjectDetectorEnsemble:
         y_max = y_min + height
 
         return [x_min, y_min, x_max, y_max]
+    
+    def xyxy_norm_to_yolo_norm(self, norm_bbox_xyxy):
+        xmin, ymin, xmax, ymax = norm_bbox_xyxy
+
+        width = xmax - xmin
+        height = ymax - ymin
+        x_center = xmin + (width / 2)
+        y_center = ymin + (height / 2)
+
+        return (x_center, y_center, width, height)
 
     def yolo_to_xyxy(self, yolo_bbox):
         x_center, y_center, width, height = yolo_bbox
@@ -254,6 +307,7 @@ class ObjectDetectorEnsemble:
         y_max = y_center + height / 2
 
         return [x_min, y_min, x_max, y_max]
+    
     def yolo_to_coco_norm(self, yolo_bbox):
         x_center, y_center, width, height = yolo_bbox
         x_min = x_center - width / 2
@@ -278,24 +332,13 @@ class ObjectDetectorEnsemble:
         # Combine the model predictions using the ensemble method
 
         if self.ensemble_methods == 'nms':
-            bboxes, scores, labels = nms(bboxes, scores, labels, iou_thr=0.6)
-            combined_preds = np.column_stack((bboxes, scores, labels))
-
+            bboxes, scores, labels = nms(bboxes, scores, labels, iou_thr=self.iou)
         elif self.ensemble_methods == 'soft-nms':
-            
             bboxes, scores, labels = soft_nms(bboxes, scores, labels, method=2, iou_thr=self.iou, thresh=self.conf)
-            combined_preds = np.column_stack((bboxes, scores, labels))
         elif self.ensemble_methods == 'nmw':
-
             bboxes, scores, labels = non_maximum_weighted(bboxes, scores, labels, iou_thr=self.iou, skip_box_thr=self.conf)
-            combined_preds = np.column_stack((bboxes, scores, labels))
         elif self.ensemble_methods == 'wbf':
-
             bboxes, scores, labels = weighted_boxes_fusion(bboxes, scores, labels, iou_thr=self.iou, skip_box_thr=self.conf)
-            combined_preds = np.column_stack((bboxes, scores, labels))
-        elif self.ensemble_methods == "OBB": #DOES NOT WORK ATM, NEEDS FIX
-            #bboxes, scores, labels = [], [], []
-            subprocess.run(['python', 'program.py'])
         return bboxes, scores, labels
         
     def box_imgs(self, model_name, bboxes, scores, labels, output_folder, img_paths, format="yolo", norm=True):
