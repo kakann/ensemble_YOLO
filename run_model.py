@@ -37,7 +37,7 @@ class EnsembleResults:
         
 
 class ObjectDetectorEnsemble:
-    def __init__(self, models, confs = [], ious = [], ensemble_methods=["nms"], conf=0.4, iou=0.6, tta=True):
+    def __init__(self, models, confs = [], ious = [], ensemble_methods=["nms"], conf=0.4, iou=0.6, tta=True, offline=False):
         self.models = []
         self.model_predictions = [] # list of tuples. Each tuples is bboxes, scores, labels
         self.ensemble_methods = ensemble_methods
@@ -56,14 +56,17 @@ class ObjectDetectorEnsemble:
         
         print(self.model_names)
         for weights in models:
-            try: 
-               yolo = yolov5.load(weights)
-               self.models.append((weights, "yolov5"))
-               print("v5")
-            except:
-                print("v8")
-                YOLO(weights)
-                self.models.append((weights, "yolov8"))
+            if offline:
+                self.models.append((weights, "unknown"))
+            else:
+                try: 
+                    yolo = yolov5.load(weights)
+                    self.models.append((weights, "yolov5"))
+                    print("v5")
+                except:
+                    print("v8")
+                    YOLO(weights)
+                    self.models.append((weights, "yolov8"))
 
     #Runs m models defined in self.models
     #Returns bboxes, scores, labels
@@ -118,15 +121,17 @@ class ObjectDetectorEnsemble:
             assert("No predictions to work with! Both img_folder and predict folders are empty!")
         
         img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
+        img_paths.sort()
         img_shapes_list= []
         for img in img_paths:
             img_shapes_list.append(cv2.imread(img).shape[:2])
 
         # Load the image paths in the folder
-        boxes_list, scores_list, labels_list = [], [], []
+        boxes_list, scores_list, labels_list, file_list = [], [], [], []
         #Run all input models on the input data if there are not predict folders as input.
         if img_folder is not None:
             img_paths = [os.path.join(img_folder, f) for f in os.listdir(img_folder) if f.endswith('.jpg') or f.endswith('.png')]
+            img_paths.sort()
             if len(predict_folders) == 0:
                 boxes_list, scores_list, labels_list =self.run_models(img_paths=img_paths)
 
@@ -140,17 +145,24 @@ class ObjectDetectorEnsemble:
             if len(predict_folders) != len(self.models):
                 assert(f"the amount of models needs to be equal to the amount of predict folders: predfolder = {len(predict_folders)} != models {len(self.models)}")
             for folder in predict_folders:
+                #print(f"folder atm {folder}")
+                #print(f"folder len = {len(os.listdir(folder))}")
                 pred_paths = [os.path.join(folder, f) for f in os.listdir(folder) if f.endswith('.txt') or f.endswith('.xml')]
+                pred_paths.sort()
+                #print(f"folder atm {pred_paths}")
+                #print(f"folder len222 = {len(pred_paths)}")
                 boxesp, scoresp, labelsp = [], [], []
                 for file in pred_paths:
                     boxes, scores, labels = self.read_yolo_file(file)
                     boxesp.append(boxes)
                     scoresp.append(scores)
                     labelsp.append(labels)
-                self.model_predictions.append((boxesp, scoresp, labelsp))
+                file_list.append(file)
+                self.model_predictions.append((boxesp, scoresp, labelsp, file))
                 boxes_list.append(boxesp)
                 scores_list.append(scoresp)
                 labels_list.append(labelsp)
+                
 
         #if there are groundtruths attatched, read them. They will be used for producing statistics later.
         if gt_folder is not None:
@@ -173,9 +185,8 @@ class ObjectDetectorEnsemble:
         ensembles = self.ensemble_methods
         for ensemble in ensembles:
             print(ensemble)
-            #print(self.model_predictions[0])
             self.ensemble_methods = ensemble
-            eboxes, escores, elabels = self.run_ensemble(img_shapes_list, boxes_list, scores_list, labels_list, img_folder)
+            eboxes, escores, elabels = self.run_ensemble(img_shapes_list, boxes_list, scores_list, labels_list, img_folder, file_list)
             #print(eboxes, escores, elabels)
             ensembleResult = Ensemble(ensemble, (eboxes, escores, elabels))
             self.ensemble_results.append(ensembleResult)
@@ -184,13 +195,16 @@ class ObjectDetectorEnsemble:
         ensembles = []
         for ensemble in self.ensemble_results:
             ensembles.append(ensemble.predictions)
-
+        os.makedirs("runs", exist_ok=True)
         base_dir = os.getcwd()
         folder_prefix = f"{out_folder}_IoU:{self.iou}_Conf:{self.conf}"
-        test_out_dir = self.get_next_folder_name(base_dir, folder_prefix)
+        test_out_dir = self.get_next_folder_name(os.path.join(base_dir, "runs"), folder_prefix)
         os.makedirs(test_out_dir, exist_ok=True)
-        
+        count = 0
         for model_name, data in zip(self.model_names +self.ensemble_methods , self.model_predictions + ensembles): #+ ensembles)
+            count +=1
+            print(f"Count {count}")
+
             pred_boxes, pred_scores, pred_labels = data
             folder = predict_folders[0]
 
@@ -200,45 +214,55 @@ class ObjectDetectorEnsemble:
             model_out= os.path.join(test_out_dir, model_name)
             os.makedirs(model_out)
             pred_files = [os.path.join(folder, f) for f in os.listdir(folder) if f.endswith('.txt') or f.endswith('.xml')]
+            pred_files.sort()
+            print(f"len pred files {len(pred_files)}")
+            print(f"folder {folder}")
             for boxes, scores, labels, file in zip(pred_boxes, pred_scores, pred_labels, pred_files):
                 file = file.split("/")[-1]
                 output_file = os.path.join(model_out, file)
-                final_boxes, final_labels = [], []
+                final_boxes, final_labels, final_scores = [], [], []
 
                 for ii, score in enumerate(scores):
                     if score >= self.conf:
                         final_boxes.append(boxes[ii])
                         final_labels.append(labels[ii])
+                        final_scores.append(scores[ii])
 
-                self.save_normalized_bboxes_to_file(output_file, file, final_boxes, final_labels)
+
+                self.save_normalized_bboxes_to_file(output_file, file, final_boxes, final_labels, final_scores)
                 
-                
+
+        #removes all predictions for next run
+        self.model_predictions = []
+        
                     
                 
 
                 
 
         
-    def save_normalized_bboxes_to_file(self, output_file, filename, norm_bboxes, labels):
+    def save_normalized_bboxes_to_file(self, output_file, filename, norm_bboxes, labels, scores):
         with open(output_file, 'a') as f:
-            for norm_bbox, label in zip(norm_bboxes, labels):
+            for norm_bbox, label, score in zip(norm_bboxes, labels, scores):
                 x_center, y_center, width, height = norm_bbox
-                f.write(f"{label} {x_center} {y_center} {width} {height}\n")
+                f.write(f"{label} {x_center} {y_center} {width} {height} {score}\n")
 
 
 
 
 
     #Runs runs the result of each img on in ensemble
-    def run_ensemble(self, img_shapes_list, boxes_list, scores_list, labels_list, img_folder):
+    def run_ensemble(self, img_shapes_list, boxes_list, scores_list, labels_list, img_folder, file_list): #ADD FILESLIST SO THAT THE FILE NAME FOLLOWS THE prediction
+        #print(f"{os.listdir(img_folder)}")
         j = 0
-        result_bboxes, result_scores, result_labels = [], [],[]
+        result_bboxes, result_scores, result_labels, result_file_list = [], [],[], []
         #for each first img predictions from each model, should iterate once for each i images.
-        for model_predictions_boxes, model_predictions_scores, model_predictions_labels in zip(zip(*boxes_list), zip(*scores_list), zip(*labels_list)):
+        for model_predictions_boxes, model_predictions_scores, model_predictions_labels in zip(zip(*boxes_list), zip(*scores_list), zip(*labels_list), zip(*file_list)):
             #(f"Doing {self.ensemble_methods} on image {j}")
             bboxes= []
             scores= []
             labels=[]
+            
             #should iterate once for each model
             for i in range(len(model_predictions_boxes)):
                 width = img_shapes_list[j][1]
@@ -263,8 +287,14 @@ class ObjectDetectorEnsemble:
             
             
             
-
-            bboxes, scores, labels = self.pick_ensemble(coco_boxes, scores, labels)
+            boxes_flat = [item for sublist in coco_boxes for item in sublist]
+            scores_flat = [item for sublist in scores for item in sublist]
+            labels_flat = [item for sublist in labels for item in sublist]
+            
+            
+            
+            bboxes, scores, labels = self.pick_ensemble([boxes_flat], [scores_flat], [labels_flat])
+            
 
             yolo_boxes = []
             for box in bboxes:
@@ -330,6 +360,12 @@ class ObjectDetectorEnsemble:
     #should return the new bboxes, labels, and scores for that img TBC!!
     def pick_ensemble(self, bboxes, scores, labels):
         # Combine the model predictions using the ensemble method
+        import sys
+        # Save the current stdout
+        original_stdout = sys.stdout
+
+        # Redirect stdout to null
+        sys.stdout = open(os.devnull, 'w')
 
         if self.ensemble_methods == 'nms':
             bboxes, scores, labels = nms(bboxes, scores, labels, iou_thr=self.iou)
@@ -339,6 +375,10 @@ class ObjectDetectorEnsemble:
             bboxes, scores, labels = non_maximum_weighted(bboxes, scores, labels, iou_thr=self.iou, skip_box_thr=self.conf)
         elif self.ensemble_methods == 'wbf':
             bboxes, scores, labels = weighted_boxes_fusion(bboxes, scores, labels, iou_thr=self.iou, skip_box_thr=self.conf)
+        sys.stdout = original_stdout
+
+        
+        
         return bboxes, scores, labels
         
     def box_imgs(self, model_name, bboxes, scores, labels, output_folder, img_paths, format="yolo", norm=True):
@@ -397,6 +437,7 @@ class ObjectDetectorEnsemble:
         boxes, scores, labels = [], [], []
         
         with open(prediction_file, 'r') as file:
+            
             for line in file.readlines():
                 data = line.strip().split(' ')
                 #print(data)
@@ -405,6 +446,8 @@ class ObjectDetectorEnsemble:
                 boxes.append([x_center, y_center, width, height])
                 scores.append(score)
                 labels.append(label)
+        
+        
         
         return boxes, scores, labels
 
